@@ -44,19 +44,34 @@ REQUIRED_COLUMNS = [
     "Init Fwd Win Byts", "Init Bwd Win Byts", "Label"
 ]
 
-# CIC-IDS datasets sometimes use different column names
+# CIC-IDS2017 vs CIC-IDS2018 column name variants
+# CIC-IDS2017 uses: Source IP, Destination IP, Source Port, Destination Port
+# CIC-IDS2018 (ML) may use: Src IP, Dst IP or completely different schema
 COLUMN_ALIASES = {
-    # Timestamp variations
-    "Timestamp": ["Timestamp", "Dst Port "],  # Some datasets have trailing space
-    "Src IP": ["Src IP", "Source IP"],
-    "Dst IP": ["Dst IP", "Destination IP"],
-    # Some datasets use shortened names
-    "Flow Duration": ["Flow Duration", "Fwd IAT Total"],
-    "Protocol": ["Protocol", "Protocol Code"],
+    "Timestamp": ["Timestamp", " Timestamp"],
+    "Src IP": ["Src IP", "Source IP", " Source IP"],
+    "Dst IP": ["Dst IP", "Destination IP", " Destination IP"],
+    "Src Port": ["Src Port", "Source Port", " Source Port"],
+    "Dst Port": ["Dst Port", "Destination Port", " Destination Port"],
+    "Protocol": ["Protocol", " Protocol"],
+    "Flow Duration": ["Flow Duration", " Flow Duration", "Fwd IAT Total"],
+    "Tot Fwd Pkts": ["Tot Fwd Pkts", " Tot Fwd Pkts", "Total Fwd Packets"],
+    "Tot Bwd Pkts": ["Tot Bwd Pkts", " Tot Bwd Pkts", "Total Bwd Packets"],
+    "TotLen Fwd Pkts": ["TotLen Fwd Pkts", " TotLen Fwd Pkts", "Total Length Fwd Packets"],
+    "TotLen Bwd Pkts": ["TotLen Bwd Pkts", " TotLen Bwd Pkts", "Total Length Bwd Packets"],
+    "Flow IAT Mean": ["Flow IAT Mean", " Flow IAT Mean"],
+    "Flow IAT Std": ["Flow IAT Std", " Flow IAT Std"],
+    "SYN Flag Cnt": ["SYN Flag Cnt", " SYN Flag Cnt", "Syn Count"],
+    "ACK Flag Cnt": ["ACK Flag Cnt", " ACK Flag Cnt", "Ack Count"],
+    "RST Flag Cnt": ["RST Flag Cnt", " RST Flag Cnt", "Rst Count"],
+    "FIN Flag Cnt": ["FIN Flag Cnt", " FIN Flag Cnt", "Fin Count"],
+    "Init Fwd Win Byts": ["Init Fwd Win Byts", " Init Fwd Win Byts", "Fwd Init Win Bytes"],
+    "Init Bwd Win Byts": ["Init Bwd Win Byts", " Init Bwd Win Byts", "Bwd Init Win Bytes"],
+    "Label": ["Label", " Label"],
 }
 
 # Optional packet-level features (degrade to 0 if absent)
-OPTIONAL_COLUMNS = ["TTL", "Retransmit Cnt", "Retransmission Count"]
+OPTIONAL_COLUMNS = ["TTL", "Retransmit Cnt", "Retransmission Count", " TTL"]
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -81,13 +96,62 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def validate_columns(df: pd.DataFrame) -> tuple[bool, list]:
+def diagnose_dataset_type(df: pd.DataFrame) -> str:
     """
-    Validate that all required columns are present.
+    Attempt to identify which dataset variant this is based on column patterns.
+    Returns: "CIC-IDS2017", "CIC-IDS2018", or "UNKNOWN"
+    """
+    # CIC-IDS2017 signs: has "Source IP" or "Src IP" column
+    has_src_ip = any(col in df.columns for col in ["Src IP", "Source IP", " Source IP"])
+    has_dst_ip = any(col in df.columns for col in ["Dst IP", "Destination IP", " Destination IP"])
+
+    # CIC-IDS2018 ML variant: lacks Source/Dest IPs, has different structure
+    has_flow_id = any("Flow ID" in col or "FlowID" in col for col in df.columns)
+
+    if has_src_ip and has_dst_ip:
+        return "CIC-IDS2017"
+    elif has_flow_id and not (has_src_ip and has_dst_ip):
+        return "CIC-IDS2018 (ML variant - lacks Src/Dst IP)"
+    else:
+        return "UNKNOWN"
+
+
+def validate_columns(df: pd.DataFrame, source: str = "cic_ids2017") -> tuple[bool, list]:
+    """
+    Validate that all required columns are present with helpful diagnostics.
     Returns (is_valid, missing_columns).
+    Prints detailed preflight check output on validation failure.
     """
     missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
-    return len(missing) == 0, missing
+
+    if len(missing) == 0:
+        return True, []
+
+    # Preflight check: print diagnostic information
+    dataset_type = diagnose_dataset_type(df)
+    print(f"\n{'='*70}")
+    print(f"PREFLIGHT CHECK: COLUMN VALIDATION FAILED")
+    print(f"{'='*70}")
+    print(f"Detected dataset type: {dataset_type}")
+    print(f"Configured dataset source: {source}")
+    print(f"\nMissing required columns ({len(missing)}):")
+    for col in missing:
+        print(f"  - {col}")
+
+    print(f"\nAvailable columns in CSV ({len(df.columns)}):")
+    for i, col in enumerate(sorted(df.columns), 1):
+        if i % 2 == 0:
+            print(f"  {col:30s}")
+        else:
+            print(f"  {col:30s}", end="")
+    print()
+
+    print(f"\nCIC-IDS2017 uses: Source IP, Destination IP, Source Port, Destination Port")
+    print(f"CIC-IDS2018 (ML) uses: Flow ID, different schema, often LACKS Src/Dst IP")
+    print(f"\nThis integration requires Src IP and Dst IP for per-host aggregation.")
+    print(f"CIC-IDS2018 may not be suitable for this pipeline.")
+
+    return False, missing
 
 
 def clean_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
@@ -211,14 +275,14 @@ def log_data_quality(df: pd.DataFrame, source: str) -> dict:
     return stats
 
 
-def main(input_dir: str, output_file: str, source: str = "cic_ids2018"):
+def main(input_dir: str, output_file: str, source: str = "cic_ids2017"):
     """
     End-to-end dataset preparation.
 
     Args:
         input_dir: Path to input CSV or directory of CSVs
         output_file: Path to save processed flows.csv
-        source: Dataset source identifier (cic_ids2018, cic_ids2017, etc.)
+        source: Dataset source identifier (cic_ids2017 PRIMARY, cic_ids2018 secondary)
     """
     logger.info(f"Starting dataset preparation: {source}")
     logger.info(f"Input: {input_dir}")
@@ -231,10 +295,13 @@ def main(input_dir: str, output_file: str, source: str = "cic_ids2018"):
     # Normalize columns
     df = normalize_columns(df)
 
-    # Validate
-    is_valid, missing = validate_columns(df)
+    # Validate (with preflight diagnostics)
+    is_valid, missing = validate_columns(df, source=source)
     if not is_valid:
-        raise ValueError(f"Missing required columns: {missing}")
+        raise ValueError(
+            f"Missing required columns: {missing}. "
+            f"This dataset may not be {source}. See preflight check above."
+        )
     logger.info("✓ All required columns present")
 
     # Clean
@@ -289,7 +356,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare real network datasets for world model training")
     parser.add_argument("--input-dir", required=True, help="Input CSV file or directory of CSVs")
     parser.add_argument("--output", default="data/raw/flows.csv", help="Output CSV path")
-    parser.add_argument("--source", default="cic_ids2018", help="Dataset source identifier")
+    parser.add_argument("--source", default="cic_ids2017", choices=["cic_ids2017", "cic_ids2018"],
+                        help="Dataset source: cic_ids2017 (PRIMARY), cic_ids2018 (secondary)")
     args = parser.parse_args()
 
     df, provenance = main(args.input_dir, args.output, args.source)

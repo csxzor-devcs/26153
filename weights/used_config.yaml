@@ -3,7 +3,7 @@ data:
   history_length: 5
   horizon: 2
   host_col: Src IP
-  purge_gap_seconds: 600
+  purge_gap_seconds: 0
   raw_flows_path: data/raw/flows_synthetic_dev.csv
   raw_input_dir: null
   split_strategy: chronological
@@ -31,5 +31,5 @@ train:
   - 1.0
   lr: 0.005
   min_epochs: 5
-  selected_threshold: 0.5
-  selected_threshold_lr: 0.5
+  selected_threshold: 0.2
+  selected_threshold_lr: 0.6

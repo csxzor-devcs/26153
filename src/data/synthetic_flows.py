@@ -147,12 +147,9 @@ def generate_synthetic_flows(n_hosts: int = 40, attack_fraction: float = 0.5,
 
         target_ip = f"10.0.0.{rng.integers(2, 250)}"
         c2_ip = f"203.0.113.{rng.integers(2, 250)}"
-        # Campaign must start well past the model's history length (T windows,
-        # default 20 * 60s) or every attack window gets trimmed away as pure
-        # "history" before a single (X, y) sequence is ever built from it —
-        # starting at 55-70% of the session leaves >=20 benign windows before
-        # the campaign AND >=20 windows of runway after it for K-step targets.
-        campaign_start = rng.uniform(session_seconds * 0.55, session_seconds * 0.70)
+        # Campaign starts uniformly across timeline to ensure attacks appear in all splits
+        # Avoid very early (<25% to ensure T history windows) or very late (>75% to ensure K-window horizon)
+        campaign_start = rng.uniform(session_seconds * 0.25, session_seconds * 0.75)
         t = campaign_start
 
         for _ in range(rng.integers(80, 150)):     # Reconnaissance: dense port-scan burst

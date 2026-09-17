@@ -84,6 +84,76 @@ def build_sequences(state_df: pd.DataFrame, T: int = 20, K: int = 5,
     }
 
 
+def per_scenario_chronological_split(times: np.ndarray, train_frac: float = 0.70,
+                                      val_frac: float = 0.15, hosts_array: np.ndarray = None,
+                                      purge_gap_seconds: int = 0) -> tuple:
+    """
+    Per-scenario chronological split: groups sequences by date, splits each date
+    chronologically (70/15/15), then concatenates splits across dates.
+
+    This ensures attacks that cluster on certain days don't all end up in training.
+
+    Args:
+        times: sequence timestamps (pandas Timestamp objects)
+        train_frac: fraction within each scenario for training
+        val_frac: fraction within each scenario for validation (remainder is test)
+        purge_gap_seconds: gap between splits (applied within each scenario)
+
+    Returns:
+        (train_mask, val_mask, test_mask) - boolean arrays
+    """
+    train_mask = np.zeros(len(times), dtype=bool)
+    val_mask = np.zeros(len(times), dtype=bool)
+    test_mask = np.zeros(len(times), dtype=bool)
+
+    # Decide grouping strategy
+    if hosts_array is not None:
+        # Per-host grouping for synthetic data
+        unique_scenarios = np.unique(hosts_array)
+        grouping_key = hosts_array
+        grouping_type = "host"
+    else:
+        # Per-date grouping for real data
+        unique_scenarios = np.unique([t.date() if hasattr(t, 'date') else t.strftime('%Y-%m-%d') for t in times])
+        grouping_key = [t.date() if hasattr(t, 'date') else t.strftime('%Y-%m-%d') for t in times]
+        grouping_type = "date"
+
+    for scenario in unique_scenarios:
+        # Find all sequences for this scenario
+        if grouping_type == "host":
+            scenario_mask = grouping_key == scenario
+        else:
+            scenario_mask = np.array([g == scenario for g in grouping_key])
+
+        if not scenario_mask.any():
+            continue
+
+        scenario_indices = np.where(scenario_mask)[0]
+        scenario_times = times[scenario_mask]
+
+        # Split this scenario's sequences chronologically
+        times_sorted_idx = np.argsort(scenario_times)
+        n = len(scenario_times)
+        n_train = int(n * train_frac)
+        n_val = int(n * val_frac)
+
+        # Map back to original indices
+        train_idx = scenario_indices[times_sorted_idx[:n_train]]
+        val_idx = scenario_indices[times_sorted_idx[n_train:n_train + n_val]]
+        test_idx = scenario_indices[times_sorted_idx[n_train + n_val:]]
+
+        train_mask[train_idx] = True
+        val_mask[val_idx] = True
+        test_mask[test_idx] = True
+
+    # Verify all splits have at least one sequence with attacks
+    if not train_mask.any() or not val_mask.any() or not test_mask.any():
+        print("[WARNING] Per-scenario split resulted in empty split(s). Falling back to global chronological split.")
+        return chronological_split(times, train_frac, val_frac, purge_gap_seconds)
+
+    return train_mask, val_mask, test_mask
+
+
 def chronological_split(times: np.ndarray, train_frac: float = 0.70,
                        val_frac: float = 0.15, purge_gap_seconds: int = 0) -> tuple:
     """

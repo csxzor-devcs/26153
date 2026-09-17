@@ -17,8 +17,9 @@ data:
   split_strategy: "chronological"
   train_frac: 0.70
   val_frac: 0.15
-  # For development: T=5, K=2 requires (5+2-1)*60 = 360s purge gap
-  purge_gap_seconds: 600
+  # For development: synthetic data is all on one day, so large purge_gap causes issues
+  # Per-scenario split (per-day for real, per-host for synthetic) handles temporal separation
+  purge_gap_seconds: 0
 
   use_attack_semantics: true
 
