@@ -256,19 +256,30 @@ def main(input_dir: str, output_file: str, source: str = "cic_ids2018"):
     df.to_csv(output_file, index=False)
     logger.info(f"✓ Saved processed flows: {output_file}")
 
-    # Save provenance
+    # Save provenance with detailed dataset identification
     provenance_file = output_file.replace(".csv", "_provenance.json")
+
+    # Map source to human-readable dataset name
+    dataset_names = {
+        "cic_ids2017": "CIC-IDS2017",
+        "cic_ids2018": "CIC-IDS2018",
+    }
+    dataset_name = dataset_names.get(source, source.upper())
+
     provenance = {
-        "source": source,
+        "dataset": dataset_name,
+        "dataset_source_code": source,
         "input_path": input_dir,
         "rows_loaded": clean_stats["rows_before"],
         "rows_retained": clean_stats["rows_after"],
         "rows_removed": clean_stats["rows_removed_total"],
         "quality_stats": quality_stats,
+        "timestamp_generated": pd.Timestamp.now().isoformat(),
     }
     with open(provenance_file, "w") as f:
         json.dump(provenance, f, indent=2, default=str)
     logger.info(f"✓ Saved provenance: {provenance_file}")
+    logger.info(f"✓ Dataset: {dataset_name}")
 
     logger.info("Dataset preparation complete")
     return df, provenance

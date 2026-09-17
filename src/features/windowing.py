@@ -21,24 +21,28 @@ def build_sequences(state_df: pd.DataFrame, T: int = 20, K: int = 5,
                      feature_columns=FEATURE_COLUMNS) -> dict:
     """Build sequences with full temporal and metadata tracking.
 
-    Canonical temporal indexing (REQUIRED FOR REPRODUCIBILITY):
-    Given index i, we define:
-    - S_i = network state at window i
-    - Sequence history ends at window t: history contains S_{t-T+1}, ..., S_t (T windows total)
-    - Targets are future-only: S_{t+1}, ..., S_{t+K}
+    CANONICAL TEMPORAL INDEXING (REQUIRED FOR REPRODUCIBILITY):
 
-    Formal specification:
-    - X = [S_{t-T+1}, ..., S_t]           (input: history ending at t)
-    - y_next = S_{t+1}                     (target: next state)
-    - y_inf = 1[any(S_{t+1}...S_{t+K}) is attack]  (infiltration in next K windows)
-    - y_stage = stage(S_{t+1})             (stage of next state)
-    - times[i] = timestamp of S_t          (history endpoint)
+    This module enforces a strict temporal indexing convention to prevent
+    information leakage. All sequences are defined relative to the history
+    endpoint index `i`:
 
-    SECURITY: y_inf and y_stage are NEVER trained on test data — they come from the
-    next K windows after the history endpoint.
+    - S_i = network state at window i (history endpoint)
+    - Input history:  X = [S_{i-T+1}, S_{i-T+2}, ..., S_i]  (T windows total)
+    - Next state:     y_next = S_{i+1}
+    - Infiltration:   y_inf = 1 iff any(stage in [S_{i+1}, S_{i+2}, ..., S_{i+K}] > 0)
+    - Stage target:   y_stage = stage(S_{i+1})
+    - Sequence time:  times[i] = timestamp of S_i (history endpoint)
 
-    In 0-indexed Python with range(T, n-K):
-    - History: feats[t-T:t] gives S_{t-T}, ..., S_{t-1} → need shift to S_{t-T+1}, ..., S_t
+    CRITICAL: Targets y_inf and y_stage ONLY use windows [i+1, i+K]. They never
+    use the history [i-T+1, i], preventing information leakage within the sequence.
+
+    PYTHON IMPLEMENTATION DETAIL (0-indexed arrays):
+    For loop variable i in range(T, n-K), we build:
+    - feats[i-T+1:i+1]        gives [S_{i-T+1}, ..., S_i]  ✓ correct (T windows)
+    - feats[i+1]              gives S_{i+1}               ✓ correct (next state)
+    - stages[i+1:i+1+K]       gives [S_{i+1}, ..., S_{i+K}]  ✓ correct (future only)
+    - g["window_start"].iloc[i]  timestamp of S_i         ✓ correct (history endpoint)
     """
     X, y_next, y_inf, y_stage, hosts, times = [], [], [], [], [], []
 
@@ -172,19 +176,29 @@ def host_level_split(hosts: np.ndarray, train_frac: float, val_frac: float, seed
 
 def verify_no_leakage(times: np.ndarray, train_mask: np.ndarray,
                       val_mask: np.ndarray, test_mask: np.ndarray,
-                      tolerance_seconds: int = 60) -> dict:
+                      T: int = 20, K: int = 5, window_seconds: int = 60,
+                      tolerance_seconds: int = 0) -> dict:
     """
-    Verify that splits are temporally disjoint (no information leakage).
+    Verify temporal split integrity using EFFECTIVE INTERVALS, not just timestamps.
 
-    Checks:
-    1. All sequences in train occur before all in val
-    2. All sequences in val occur before all in test
-    3. No overlap (with optional tolerance for boundary cases)
+    Each sequence at time t_i has an effective temporal footprint:
+    - History start:  t_i - (T-1) * window_seconds
+    - History end:    t_i
+    - Target start:   t_i + window_seconds
+    - Target end:     t_i + K * window_seconds
+    - Total interval: [t_i - (T-1)*window_seconds, t_i + K*window_seconds]
+
+    Leakage prevention requires:
+    - max(train_effective_end) < min(val_effective_start)
+    - max(val_effective_end) < min(test_effective_start)
+
+    This prevents training sequences' target windows from overlapping with
+    validation/test sequences' history windows.
 
     Returns dict with:
-    - is_valid: bool (all checks passed)
-    - issues: list of identified leakage problems
-    - stats: summary statistics
+    - is_valid: bool (no leakage detected)
+    - issues: list of leakage violations
+    - stats: detailed interval boundaries
     """
     issues = []
 
@@ -192,30 +206,67 @@ def verify_no_leakage(times: np.ndarray, train_mask: np.ndarray,
     val_times = times[val_mask]
     test_times = times[test_mask]
 
-    stats = {
-        "train_time_min": train_times.min() if len(train_times) > 0 else None,
-        "train_time_max": train_times.max() if len(train_times) > 0 else None,
-        "val_time_min": val_times.min() if len(val_times) > 0 else None,
-        "val_time_max": val_times.max() if len(val_times) > 0 else None,
-        "test_time_min": test_times.min() if len(test_times) > 0 else None,
-        "test_time_max": test_times.max() if len(test_times) > 0 else None,
-    }
+    # Compute effective intervals
+    history_offset = pd.Timedelta(seconds=(T-1) * window_seconds)
+    target_offset = pd.Timedelta(seconds=K * window_seconds)
 
-    # Check train < val
-    if len(train_times) > 0 and len(val_times) > 0:
-        tolerance = pd.Timedelta(seconds=tolerance_seconds)
-        overlap = train_times.max() > (val_times.min() - tolerance)
-        if overlap:
-            issues.append(f"Train/Val overlap: train_max={train_times.max()}, val_min={val_times.min()}")
+    def effective_interval(t):
+        """Compute [start, end] for a sequence at time t"""
+        return (t - history_offset, t + target_offset)
 
-    # Check val < test
-    if len(val_times) > 0 and len(test_times) > 0:
-        tolerance = pd.Timedelta(seconds=tolerance_seconds)
-        overlap = val_times.max() > (test_times.min() - tolerance)
-        if overlap:
-            issues.append(f"Val/Test overlap: val_max={val_times.max()}, test_min={test_times.min()}")
+    # Compute interval boundaries for each split
+    if len(train_times) > 0:
+        train_intervals = [effective_interval(t) for t in train_times]
+        train_start = min(i[0] for i in train_intervals)
+        train_end = max(i[1] for i in train_intervals)
+    else:
+        train_start = train_end = None
+
+    if len(val_times) > 0:
+        val_intervals = [effective_interval(t) for t in val_times]
+        val_start = min(i[0] for i in val_intervals)
+        val_end = max(i[1] for i in val_intervals)
+    else:
+        val_start = val_end = None
+
+    if len(test_times) > 0:
+        test_intervals = [effective_interval(t) for t in test_times]
+        test_start = min(i[0] for i in test_intervals)
+        test_end = max(i[1] for i in test_intervals)
+    else:
+        test_start = test_end = None
+
+    # Check train < val (with optional tolerance)
+    if train_end is not None and val_start is not None:
+        tol = pd.Timedelta(seconds=tolerance_seconds)
+        if train_end > (val_start - tol):
+            issues.append(
+                f"Train/Val leakage: train_effective_end={train_end} > "
+                f"val_effective_start={val_start}"
+            )
+
+    # Check val < test (with optional tolerance)
+    if val_end is not None and test_start is not None:
+        tol = pd.Timedelta(seconds=tolerance_seconds)
+        if val_end > (test_start - tol):
+            issues.append(
+                f"Val/Test leakage: val_effective_end={val_end} > "
+                f"test_effective_start={test_start}"
+            )
 
     is_valid = len(issues) == 0
+
+    stats = {
+        "train_effective_start": train_start,
+        "train_effective_end": train_end,
+        "val_effective_start": val_start,
+        "val_effective_end": val_end,
+        "test_effective_start": test_start,
+        "test_effective_end": test_end,
+        "history_offset_seconds": (T-1) * window_seconds,
+        "target_offset_seconds": K * window_seconds,
+        "tolerance_seconds": tolerance_seconds,
+    }
 
     return {
         "is_valid": is_valid,

@@ -1,0 +1,42 @@
+# Development configuration for synthetic data testing
+# Use this for CI/CD, smoke tests, and development without real data
+
+seed: 42
+
+data:
+  window_seconds: 60
+  history_length: 5   # Smaller for dev (less temporal overhead)
+  horizon: 2          # Smaller for dev
+
+  # Synthetic data (bundled generator)
+  raw_flows_path: "data/raw/flows_synthetic_dev.csv"
+  raw_input_dir: null
+  dataset_source: "synthetic_dev"  # Special marker for dev mode
+
+  host_col: "Src IP"
+  split_strategy: "chronological"
+  train_frac: 0.70
+  val_frac: 0.15
+  # For development: T=5, K=2 requires (5+2-1)*60 = 360s purge gap
+  purge_gap_seconds: 600
+
+  use_attack_semantics: true
+
+model:
+  encoder: lstm
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.2
+  num_stages: 7
+
+train:
+  epochs: 20  # Shorter for dev
+  min_epochs: 5
+  early_stopping_patience: 3
+  lr: 0.005
+  loss_weights: [1.0, 1.0, 1.0]
+
+explain:
+  shap_background_size: 30
+  shap_nsamples: 100
+  mc_dropout_samples: 20

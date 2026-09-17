@@ -5,10 +5,10 @@ data:
   history_length: 20        # T: how many past windows the model sees
   horizon: 5                # K: how many windows ahead to forecast
 
-  # Real dataset configuration
+  # Real dataset configuration: CIC-IDS2017 is the primary experiment dataset
   raw_flows_path: "data/raw/flows.csv"   # processed flows (output of prepare.py)
-  raw_input_dir: null                    # set to /path/to/CIC-IDS2018/CSVs to auto-prepare
-  dataset_source: "cic_ids2018"          # cic_ids2018 | cic_ids2017
+  raw_input_dir: null                    # set to /path/to/CIC-IDS2017/CSVs to auto-prepare
+  dataset_source: "cic_ids2017"          # PRIMARY: cic_ids2017 (can also use cic_ids2018)
 
   host_col: "Src IP"
 
@@ -18,8 +18,9 @@ data:
   val_frac: 0.15
   # Purge gap between splits: temporal buffer to prevent information leakage
   # around train/val/test boundaries. Value in seconds.
-  # Recommended: >= horizon * window_seconds (e.g., 5 * 60 = 300 for K=5, window=60s)
-  purge_gap_seconds: 300
+  # CRITICAL: Must be >= (T + K - 1) * window_seconds to prevent target-history overlap
+  # Default: (20 + 5 - 1) * 60 = 1440s (24 minutes) for T=20, K=5, window=60s
+  purge_gap_seconds: 1440
 
   # Attack semantics: enable to track pre-attack vs during-attack sequences
   use_attack_semantics: true

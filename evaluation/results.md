@@ -2,13 +2,13 @@
 
 Data source for this run: the **bundled synthetic flow generator** (`src/data/synthetic_flows.py`) — NOT the CIC-IDS2018 dataset required by the brief. Set `data.raw_flows_path` in `configs/default.yaml` to a real dataset CSV and re-run `python -m src.train` then this script to get the real benchmark.
 
-Test set size: 200 sequences (0.0% positive infiltration rate)
+Test set size: 120 sequences (0.0% positive infiltration rate)
 
 ## Sequence Composition (Attack Semantics)
 
 - Pre-attack sequences: 0 (pure forecasting scenarios)
-- During-attack sequences: 5 (detection scenarios)
-- Benign sequences: 195 (negative examples)
+- During-attack sequences: 3 (detection scenarios)
+- Benign sequences: 117 (negative examples)
 
 ## Detection Metrics (Overall)
 

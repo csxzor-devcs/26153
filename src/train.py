@@ -30,22 +30,34 @@ from src.models.world_model import build_model, world_model_loss
 def load_flows(cfg: dict):
     import pandas as pd
     path = cfg["data"]["raw_flows_path"]
+    dataset_source = cfg["data"].get("dataset_source", "cic_ids2017")
+
+    # Map source code to human-readable names
+    dataset_names = {
+        "cic_ids2017": "CIC-IDS2017",
+        "cic_ids2018": "CIC-IDS2018",
+        "synthetic_dev": "SYNTHETIC (development mode)",
+    }
+    dataset_name = dataset_names.get(dataset_source, dataset_source.upper())
 
     # If processed flows exist, load them directly
     if os.path.exists(path):
         print(f"\n{'='*70}")
-        print(f"DATA SOURCE: REAL (CIC-IDS2018/2017)")
+        print(f"DATA SOURCE: REAL ({dataset_name})")
         print(f"{'='*70}")
         print(f"[train] loading flow data from {path}")
         df = pd.read_csv(path)
 
-        # Check for provenance file to identify data source
+        # Check for provenance file to identify and verify data source
         provenance_path = path.replace(".csv", "_provenance.json")
         if os.path.exists(provenance_path):
             with open(provenance_path) as f:
                 provenance = json.load(f)
-            print(f"[train] data source: {provenance.get('source', 'unknown')}")
+            dataset_in_file = provenance.get("dataset", "UNKNOWN")
+            print(f"[train] dataset: {dataset_in_file}")
             print(f"[train] flows retained: {provenance['quality_stats'].get('rows_total', '?'):,}")
+            print(f"[train] hosts: {provenance['quality_stats'].get('unique_hosts', '?')}")
+            print(f"[train] duration: {provenance['quality_stats'].get('timestamp_duration_hours', '?'):.1f} hours")
 
         return df
 
@@ -53,35 +65,48 @@ def load_flows(cfg: dict):
     input_dir = cfg["data"].get("raw_input_dir")
     if input_dir and os.path.exists(input_dir):
         print(f"\n{'='*70}")
-        print(f"DATA SOURCE: REAL (CIC-IDS2018/2017)")
+        print(f"DATA SOURCE: REAL ({dataset_name})")
         print(f"{'='*70}")
-        print(f"[train] preparing dataset from {input_dir}...")
+        print(f"[train] preparing {dataset_name} dataset from {input_dir}...")
         from src.data.prepare import main as prepare_main
         try:
-            source = cfg["data"].get("dataset_source", "cic_ids2018")
-            df, provenance = prepare_main(input_dir, path, source)
+            df, provenance = prepare_main(input_dir, path, dataset_source)
             return df
         except Exception as e:
-            print(f"[train] ERROR during preparation: {e}")
-            print(f"[train] falling back to synthetic data")
+            print(f"[train] ERROR during {dataset_name} preparation: {e}")
+            print(f"[train] dataset preparation failed")
+            raise
 
-    # Fall back to synthetic
+    # Allow synthetic_dev mode for development/testing
+    if dataset_source == "synthetic_dev":
+        print(f"\n{'='*70}")
+        print(f"DATA SOURCE: {dataset_name}")
+        print(f"{'='*70}")
+        print(f"[train] using bundled synthetic flow generator (development mode)")
+        from src.data.synthetic_flows import generate_synthetic_flows
+        df = generate_synthetic_flows()
+        return df
+
+    # No synthetic fallback for explicit real-data requests
     print(f"\n{'='*70}")
-    print(f"DATA SOURCE: SYNTHETIC (bundled generator)")
-    print(f"WARNING: Results from synthetic data are NOT real-world benchmarks")
+    print(f"ERROR: DATASET NOT FOUND")
     print(f"{'='*70}")
-    print(f"[train] {path} not found and no input_dir configured.")
-    print(f"[train] Using bundled synthetic flow generator for this run.")
+    print(f"[train] Requested dataset: {dataset_name}")
+    print(f"[train] Expected path: {path}")
+    print(f"[train] Expected input_dir: raw_input_dir in configs/default.yaml")
     print(f"[train]")
-    print(f"[train] To evaluate on REAL CIC-IDS2018:")
-    print(f"[train]   1. Download dataset from nciipc.gov.in")
-    print(f"[train]   2. Set data.raw_input_dir in configs/default.yaml")
-    print(f"[train]   3. Re-run: python -m src.train")
+    print(f"[train] To train on {dataset_name}:")
+    print(f"[train]   1. Download {dataset_name} dataset")
+    print(f"[train]   2. Extract CSVs to a folder (e.g., /path/to/{dataset_source})")
+    print(f"[train]   3. Set data.raw_input_dir in configs/default.yaml")
+    print(f"[train]   4. Re-run: python -m src.train")
     print(f"[train]")
-    print(f"[train] IMPORTANT: Synthetic results should NOT be cited as project evidence.")
-    from src.data.synthetic_flows import generate_synthetic_flows
-    df = generate_synthetic_flows()
-    return df
+    print(f"[train] Alternatively, for development only, use synthetic data:")
+    print(f"[train]   python -m src.train --config configs/dev_synthetic.yaml")
+    raise FileNotFoundError(
+        f"Dataset {dataset_name} not found at {path} and no raw_input_dir configured. "
+        f"Use synthetic data for testing via configs/dev_synthetic.yaml, or provide real data."
+    )
 
 
 def scale_split(X, scaler):
@@ -129,18 +154,24 @@ def main(config_path: str):
         train_mask, val_mask, test_mask = chronological_split(
             seq["times"], cfg["data"]["train_frac"], cfg["data"]["val_frac"], purge_gap)
 
-        # Verify no temporal leakage
-        leakage_check = verify_no_leakage(seq["times"], train_mask, val_mask, test_mask)
+        # Verify no temporal leakage (checks effective intervals, not just timestamps)
+        leakage_check = verify_no_leakage(
+            seq["times"], train_mask, val_mask, test_mask,
+            T=cfg["data"]["history_length"], K=cfg["data"]["horizon"],
+            window_seconds=cfg["data"]["window_seconds"]
+        )
         if not leakage_check["is_valid"]:
-            print(f"[train] WARNING: Temporal leakage detected:")
+            print(f"[train] ERROR: Temporal leakage detected:")
             for issue in leakage_check["issues"]:
                 print(f"  - {issue}")
+            raise RuntimeError("Chronological split failed temporal leakage verification")
         else:
             print(f"[train] ✓ Chronological split verified (no temporal leakage)")
-            print(f"[train]   Purge gap: {purge_gap}s (prevents leakage around boundaries)")
-            print(f"[train]   Train range: {leakage_check['stats']['train_time_min']} → {leakage_check['stats']['train_time_max']}")
-            print(f"[train]   Val range:   {leakage_check['stats']['val_time_min']} → {leakage_check['stats']['val_time_max']}")
-            print(f"[train]   Test range:  {leakage_check['stats']['test_time_min']} → {leakage_check['stats']['test_time_max']}")
+            print(f"[train]   Purge gap: {purge_gap}s")
+            stats = leakage_check["stats"]
+            print(f"[train]   Train effective interval: {stats['train_effective_start']} → {stats['train_effective_end']}")
+            print(f"[train]   Val effective interval:   {stats['val_effective_start']} → {stats['val_effective_end']}")
+            print(f"[train]   Test effective interval:  {stats['test_effective_start']} → {stats['test_effective_end']}")
     else:
         # Fall back to host-level split (non-temporal, useful for comparison)
         from src.features.windowing import host_level_split

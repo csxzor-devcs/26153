@@ -20,7 +20,7 @@ def run(*args: str):
 
 
 if __name__ == "__main__":
-    run(sys.executable, "-m", "src.train", "--config", "configs/default.yaml")
+    run(sys.executable, "-m", "src.train", "--config", "configs/dev_synthetic.yaml")
     run(sys.executable, "-m", "evaluation.benchmark")
     run(sys.executable, "-m", "src.rollout")
     run(sys.executable, "-m", "src.explain")
