@@ -379,8 +379,112 @@ def main(config_path: str):
     # Save LR threshold to config for benchmark script
     cfg["train"]["selected_threshold_lr"] = float(best_threshold_lr)
 
+    # STATIC MODEL: Single-window MLP (temporal ablation baseline)
+    print(f"[train] training static MLP (no temporal modeling)...")
+    from src.models.static_model import build_static_model
+    static_model = build_static_model(cfg["model"], input_dim=len(FEATURE_COLUMNS)).to(device)
+    static_optim = torch.optim.Adam(static_model.parameters(), lr=cfg["train"]["lr"])
+
+    # Training loop (same structure as world model but on single-window data)
+    static_best_val_loss = float('inf')
+    static_best_checkpoint = None
+    static_training_history = []
+
+    for epoch in range(cfg["train"]["epochs"]):
+        # Training phase
+        static_model.train()
+        train_loss_epoch = 0.0
+        for i in range(0, len(X_train), 32):
+            Xbatch = torch.from_numpy(X_train[i:i+32]).to(device)
+            y_inf_batch = torch.from_numpy(y_inf_train[i:i+32]).to(device)
+            y_stage_batch = torch.from_numpy(y_stage_train[i:i+32]).to(device)
+            y_next_batch = torch.from_numpy(y_next_train[i:i+32]).to(device)
+
+            out = static_model(Xbatch)
+            mse_loss = torch.nn.functional.mse_loss(out["next_state"], y_next_batch)
+            bce_loss = torch.nn.functional.binary_cross_entropy_with_logits(out["infiltration_logit"], y_inf_batch)
+            ce_loss = torch.nn.functional.cross_entropy(out["stage_logit"], y_stage_batch)
+            loss = cfg["train"]["loss_weights"][0] * mse_loss + \
+                   cfg["train"]["loss_weights"][1] * bce_loss + \
+                   cfg["train"]["loss_weights"][2] * ce_loss
+            static_optim.zero_grad()
+            loss.backward()
+            static_optim.step()
+            train_loss_epoch += loss.item()
+
+        train_loss_epoch /= max(1, (len(X_train) + 31) // 32)
+
+        # Validation phase
+        static_model.eval()
+        with torch.no_grad():
+            val_out = static_model(Xval_t)
+            val_mse = torch.nn.functional.mse_loss(val_out["next_state"], y_next_val_t)
+            val_bce = torch.nn.functional.binary_cross_entropy_with_logits(val_out["infiltration_logit"], y_inf_val_t)
+            val_ce = torch.nn.functional.cross_entropy(val_out["stage_logit"], y_stage_val_t)
+            val_loss_epoch = cfg["train"]["loss_weights"][0] * val_mse + \
+                            cfg["train"]["loss_weights"][1] * val_bce + \
+                            cfg["train"]["loss_weights"][2] * val_ce
+            val_loss_epoch = val_loss_epoch.item()
+
+        static_training_history.append({
+            "epoch": epoch,
+            "train_loss": train_loss_epoch,
+            "val_loss": val_loss_epoch,
+        })
+
+        if epoch % 10 == 0 or epoch == cfg["train"]["epochs"] - 1:
+            print(f"  epoch {epoch:3d}  train_loss={train_loss_epoch:.4f} val_loss={val_loss_epoch:.4f}")
+
+        # Early stopping
+        if val_loss_epoch < static_best_val_loss:
+            static_best_val_loss = val_loss_epoch
+            static_best_checkpoint = {"model": static_model.state_dict(), "epoch": epoch}
+        elif epoch >= cfg["train"]["min_epochs"] and \
+             epoch - static_best_checkpoint["epoch"] >= cfg["train"]["early_stopping_patience"]:
+            print(f"[train] static model: early stopping at epoch {epoch}")
+            break
+
+    # Load best checkpoint
+    if static_best_checkpoint:
+        static_model.load_state_dict(static_best_checkpoint["model"])
+
+    # Threshold selection for static model
+    static_model.eval()
+    with torch.no_grad():
+        static_val_prob = torch.sigmoid(static_model(Xval_t)["infiltration_logit"]).cpu().numpy()
+
+    best_threshold_static = 0.5
+    best_f1_static = 0.0
+    threshold_sweep_static = []
+    for threshold in np.linspace(0.1, 0.9, 81):
+        val_pred_static = (static_val_prob > threshold).astype(int)
+        metrics_static = infiltration_metrics(y_inf_val, val_pred_static)
+        threshold_sweep_static.append({
+            "threshold": float(threshold),
+            "f1": float(metrics_static["f1"]),
+            "precision": float(metrics_static["precision"]),
+            "recall": float(metrics_static["recall"]),
+            "fpr": float(metrics_static["fpr"]),
+        })
+        if metrics_static["f1"] > best_f1_static:
+            best_f1_static = metrics_static["f1"]
+            best_threshold_static = threshold
+
+    print(f"[train] static model: selected threshold={best_threshold_static:.3f} (F1={best_f1_static:.3f} on validation)")
+
+    # Test evaluation with frozen threshold
+    with torch.no_grad():
+        test_prob_static = torch.sigmoid(static_model(Xtest_t)["infiltration_logit"]).cpu().numpy()
+
+    static_pred = (test_prob_static > best_threshold_static).astype(int)
+    static_metrics = infiltration_metrics(y_inf_test, static_pred)
+    print(f"[train] static model test metrics:  {static_metrics}")
+
+    cfg["train"]["selected_threshold_static"] = float(best_threshold_static)
+
     os.makedirs("weights", exist_ok=True)
     torch.save(model.state_dict(), "weights/world_model.pt")
+    torch.save(static_model.state_dict(), "weights/static_model.pt")
     joblib.dump(scaler, "weights/scaler.pkl")
     joblib.dump(baseline, "weights/baseline_lr.pkl")
     with open("weights/feature_columns.json", "w") as f:
@@ -413,6 +517,11 @@ def main(config_path: str):
                 "best_f1": float(best_f1_lr),
                 "sweep": threshold_sweep_lr,
             },
+            "static_model": {
+                "selected_threshold": float(best_threshold_static),
+                "best_f1": float(best_f1_static),
+                "sweep": threshold_sweep_static,
+            },
         }, f, indent=2)
 
     os.makedirs("data/processed", exist_ok=True)
@@ -429,7 +538,7 @@ def main(config_path: str):
         test_data["lead_times_test"] = seq["lead_times"][test_mask]
     np.savez("data/processed/test_split.npz", **test_data)
 
-    print("[train] saved: weights/world_model.pt, scaler.pkl, baseline_lr.pkl, "
+    print("[train] saved: weights/world_model.pt, static_model.pt, scaler.pkl, baseline_lr.pkl, "
           "feature_columns.json, used_config.yaml, threshold.json, data/processed/test_split.npz")
 
 

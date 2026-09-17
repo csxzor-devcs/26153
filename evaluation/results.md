@@ -9,15 +9,14 @@ Test set size: 520 sequences (0.0% positive infiltration rate)
 - Pre-attack sequences: 0 (pure forecasting scenarios)
 - During-attack sequences: 13 (detection scenarios)
 - Benign sequences: 507 (negative examples)
-
 ## Detection Metrics (Overall)
 
 | Model | F1 | Precision | Recall | FPR |
 |---|---|---|---|---|
 | Logistic Regression (baseline) | 0.000 | 0.000 | 0.000 | 0.000 |
+| Static MLP (temporal ablation) | 0.000 | 0.000 | 0.000 | 0.000 |
 | World Model (LSTM) | 0.000 | 0.000 | 0.000 | 0.000 |
-
-AUC-ROC: World Model = nan, Logistic Regression = nan
+AUC-ROC: World Model = nan, Static MLP = nan, Logistic Regression = nan
 
 ## Proactive Forecasting Metrics (Pre-Attack Sequences Only)
 
