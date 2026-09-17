@@ -1,8 +1,8 @@
 # SIH 2026 Network World Model — Project Status
 
 **Date**: 2026-09-18  
-**Overall Progress**: 3/8 Phases Complete (37.5%)  
-**Next Phase**: Phase 4 (Validation-Set Threshold Selection)
+**Overall Progress**: 4/8 Phases Complete (50%)  
+**Next Phase**: Phase 5 (Static Neural Ablation Baseline)
 
 ---
 
@@ -50,13 +50,14 @@
 ### Phase 4: Validation-Set Threshold Selection
 
 ### Phase 4: Validation-Set Threshold Selection
-**Location**: `src/train.py`  
-**Tasks**:
-- Sweep thresholds 0.1-0.9 on validation set
-- Select threshold with maximum F1 score
-- Save selected threshold to `weights/threshold.json`
-- Update model checkpoint saving
-- **Verification**: `python -m tests.smoke_test`
+- ✓ Fine-grained threshold sweep: 81 points (0.01 steps from 0.1 to 0.9)
+- ✓ Select threshold maximizing F1 on validation set
+- ✓ Full sweep results saved to `weights/threshold.json` (29KB)
+- ✓ Per-threshold metrics: F1, precision, recall, FPR for both models
+- ✓ Smoke test: PASSED
+
+**Files Modified**:
+- `src/train.py` — Enhanced threshold sweep (9 → 81 points), threshold.json output
 
 ### Phase 5: Static Neural Baseline
 **Location**: `src/models/static_model.py` (new file)  
