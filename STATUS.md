@@ -1,8 +1,8 @@
 # SIH 2026 Network World Model — Project Status
 
 **Date**: 2026-09-18  
-**Overall Progress**: 2/8 Phases Complete (25%)  
-**Next Phase**: Phase 3 (Graph-derived & Packet-proxy Features)
+**Overall Progress**: 3/8 Phases Complete (37.5%)  
+**Next Phase**: Phase 4 (Validation-Set Threshold Selection)
 
 ---
 
@@ -32,30 +32,22 @@
 - `src/train.py` — Split strategy call, leakage check tolerance
 - `configs/dev_synthetic.yaml` — Reduced purge_gap to 0
 
+### Phase 3: Graph-Derived & Packet-Proxy Features
+- ✓ Added graph-derived scalars: `n_distinct_dst_ips`, `n_distinct_dst_ports`, `fan_out_ratio`, `new_dst_ratio`
+- ✓ Added packet-proxy features: `init_fwd_win_mean`, `init_bwd_win_mean`, `pkt_len_mean_agg`, `pkt_len_std_agg`, `fwd_header_len_mean`
+- ✓ Per-host rolling state for new_dst_ratio (tracks previous window's destination IPs)
+- ✓ Graceful degradation with debug warnings for missing columns (Pkt Len Mean, Pkt Len Std, Fwd Header Len)
+- ✓ State vector dimension auto-updated: 20 → 29 features
+- ✓ Smoke test: PASSED
+
+**Files Modified**:
+- `src/features/extract.py` — Feature calculation, new graph and packet-proxy features
+
 ---
 
 ## 📋 Remaining Phases (Ready to Execute)
 
-### Phase 3: Graph-Derived & Packet-Proxy Features
-**Location**: `src/features/extract.py`  
-**Tasks**:
-- Add graph-derived scalars per (host, 60s window):
-  - `n_distinct_dst_ips` — count of unique destination IPs
-  - `n_distinct_dst_ports` — count of unique destination ports
-  - `fan_out_ratio` — n_distinct_dst_ips / (total flows + 1)
-  - `new_dst_ratio` — fraction of DST IPs not in previous window (requires rolling set state)
-  
-- Add packet-proxy features from existing CICFlowMeter columns:
-  - `init_fwd_win_mean` — mean of Init Fwd Win Byts
-  - `init_bwd_win_mean` — mean of Init Bwd Win Byts
-  - `pkt_len_mean_agg` — mean of Pkt Len Mean
-  - `pkt_len_std_agg` — mean of Pkt Len Std
-  - `fwd_header_len_mean` — mean of Fwd Header Len
-  
-- Update FEATURE_COLUMNS list
-- Add graceful degradation (default to 0.0 if column absent, log warning)
-- Update state vector dimension in configs/default.yaml
-- **Verification**: `python -m tests.smoke_test`
+### Phase 4: Validation-Set Threshold Selection
 
 ### Phase 4: Validation-Set Threshold Selection
 **Location**: `src/train.py`  
