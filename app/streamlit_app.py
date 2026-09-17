@@ -45,7 +45,15 @@ X_test, y_inf_test, hosts_test = data["X_test"], data["y_inf_test"], data["hosts
 attack_idx = np.where(y_inf_test == 1)[0]
 benign_idx = np.where(y_inf_test == 0)[0]
 
-st.sidebar.header("Scenario")
+st.sidebar.header("Scenario & Configuration")
+
+# Test set composition
+st.sidebar.subheader("Test Set Composition")
+st.sidebar.metric("Total sequences", len(X_test))
+st.sidebar.metric("Attacking sessions", len(attack_idx))
+st.sidebar.metric("Benign sessions", len(benign_idx))
+st.sidebar.divider()
+
 scenario_kind = st.sidebar.radio("Pick a sample from the held-out test set",
                                   ["Attacking session", "Benign session"])
 pool = attack_idx if scenario_kind == "Attacking session" else benign_idx
@@ -55,11 +63,22 @@ if len(pool) == 0:
 
 choice = st.sidebar.selectbox(
     "Session", list(range(min(len(pool), 20))),
-    format_func=lambda i: f"Host {hosts_test[pool[i]]} — window #{pool[i]}")
+    format_func=lambda i: f"Host {hosts_test[pool[i]]} — idx {pool[i]}")
 sample_idx = pool[choice]
 history = X_test[sample_idx]
 
+# Display scenario badge
+col_host, col_type = st.columns(2)
+with col_host:
+    st.metric("Host", hosts_test[sample_idx])
+with col_type:
+    scenario_badge = "🔴 Attacking" if y_inf_test[sample_idx] == 1 else "🟢 Benign"
+    st.metric("Classification", scenario_badge)
+
+st.divider()
+
 K = st.sidebar.slider("Forecast horizon (windows)", 1, cfg["data"]["horizon"], cfg["data"]["horizon"])
+st.sidebar.caption(f"Lead time: {K} windows × {cfg['data']['window_seconds']}s = ~{K * cfg['data']['window_seconds'] // 60}min")
 
 history_t = torch.tensor(history).unsqueeze(0)
 result = rollout_with_uncertainty(model, history_t, K=K, n_samples=cfg["explain"]["mc_dropout_samples"])
@@ -90,11 +109,15 @@ with col2:
 
 peak_step = int(np.argmax(prob_mean))
 if prob_mean[peak_step] > 0.5:
-    st.error(f"⚠ Predicted **{STAGE_NAMES[result['predicted_stage_trajectory'][peak_step]]}** "
-              f"within {peak_step + 1} window(s) — confidence {prob_mean[peak_step]:.0%} "
-              f"(±{prob_std[peak_step]:.0%})")
+    predicted_stage = STAGE_NAMES[result['predicted_stage_trajectory'][peak_step]]
+    col_alert_stage, col_alert_conf = st.columns([2, 1])
+    with col_alert_stage:
+        st.error(f"⚠ **{predicted_stage}** predicted within {peak_step + 1} window(s)")
+    with col_alert_conf:
+        st.metric("Confidence", f"{prob_mean[peak_step]:.0%}",
+                 delta=f"±{prob_std[peak_step]:.0%}")
 else:
-    st.success("No infiltration convergence predicted within the forecast horizon.")
+    st.success("✓ No infiltration convergence predicted within the forecast horizon.")
 
 st.divider()
 st.subheader("Explainability")
