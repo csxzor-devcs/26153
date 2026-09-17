@@ -313,12 +313,20 @@ def main(config_path: str):
     with torch.no_grad():
         val_prob = torch.sigmoid(model(Xval_t)["infiltration_logit"]).cpu().numpy()
 
-    # Find threshold that maximizes F1 on validation
+    # Find threshold that maximizes F1 on validation (fine-grained sweep: 0.01 steps)
     best_threshold = 0.5
     best_f1 = 0.0
-    for threshold in np.linspace(0.1, 0.9, 9):
+    threshold_sweep_wm = []
+    for threshold in np.linspace(0.1, 0.9, 81):  # 0.01 step size: 0.1, 0.11, ..., 0.90
         val_pred_binary = (val_prob > threshold).astype(int)
         metrics = infiltration_metrics(y_inf_val, val_pred_binary)
+        threshold_sweep_wm.append({
+            "threshold": float(threshold),
+            "f1": float(metrics["f1"]),
+            "precision": float(metrics["precision"]),
+            "recall": float(metrics["recall"]),
+            "fpr": float(metrics["fpr"]),
+        })
         if metrics["f1"] > best_f1:
             best_f1 = metrics["f1"]
             best_threshold = threshold
@@ -341,13 +349,21 @@ def main(config_path: str):
     print(f"[train] training logistic regression baseline (no temporal modeling)...")
     baseline = BaselineLogReg().fit(X_train[:, -1, :], y_inf_train, y_stage_train)
 
-    # Threshold selection on validation for baseline too
+    # Threshold selection on validation for baseline too (fine-grained sweep: 0.01 steps)
     val_prob_lr = baseline.inf_model.predict_proba(X_val[:, -1, :])[:, 1]
     best_threshold_lr = 0.5
     best_f1_lr = 0.0
-    for threshold in np.linspace(0.1, 0.9, 9):
+    threshold_sweep_lr = []
+    for threshold in np.linspace(0.1, 0.9, 81):  # 0.01 step size
         val_pred_lr = (val_prob_lr > threshold).astype(int)
         metrics_lr = infiltration_metrics(y_inf_val, val_pred_lr)
+        threshold_sweep_lr.append({
+            "threshold": float(threshold),
+            "f1": float(metrics_lr["f1"]),
+            "precision": float(metrics_lr["precision"]),
+            "recall": float(metrics_lr["recall"]),
+            "fpr": float(metrics_lr["fpr"]),
+        })
         if metrics_lr["f1"] > best_f1_lr:
             best_f1_lr = metrics_lr["f1"]
             best_threshold_lr = threshold
@@ -384,6 +400,21 @@ def main(config_path: str):
             "selected_threshold_baseline": float(best_threshold_lr),
         }, f, indent=2)
 
+    # Save threshold selection results: full sweep and selected thresholds
+    with open("weights/threshold.json", "w") as f:
+        json.dump({
+            "world_model": {
+                "selected_threshold": float(best_threshold),
+                "best_f1": float(best_f1),
+                "sweep": threshold_sweep_wm,
+            },
+            "baseline_lr": {
+                "selected_threshold": float(best_threshold_lr),
+                "best_f1": float(best_f1_lr),
+                "sweep": threshold_sweep_lr,
+            },
+        }, f, indent=2)
+
     os.makedirs("data/processed", exist_ok=True)
     # Save test split, including attack semantics if available
     test_data = {
@@ -399,7 +430,7 @@ def main(config_path: str):
     np.savez("data/processed/test_split.npz", **test_data)
 
     print("[train] saved: weights/world_model.pt, scaler.pkl, baseline_lr.pkl, "
-          "feature_columns.json, used_config.yaml, data/processed/test_split.npz")
+          "feature_columns.json, used_config.yaml, threshold.json, data/processed/test_split.npz")
 
 
 if __name__ == "__main__":
