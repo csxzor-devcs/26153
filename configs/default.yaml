@@ -1,0 +1,28 @@
+seed: 42
+
+data:
+  window_seconds: 60
+  history_length: 20        # T: how many past windows the model sees
+  horizon: 5                # K: how many windows ahead to forecast
+  raw_flows_path: "data/raw/flows.csv"   # point this at real CIC-IDS2018/2017 CSV(s)
+  host_col: "Src IP"
+  train_frac: 0.70          # host-level split, not row-level (see techsoln.md sec 8)
+  val_frac: 0.15
+  test_frac: 0.15
+
+model:
+  encoder: lstm              # lstm | transformer
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.2
+  num_stages: 7              # Benign,Recon,InitialAccess,LateralMovement,C2,Exfil(heuristic),Impact/Noise
+
+train:
+  epochs: 60
+  lr: 0.005
+  loss_weights: [1.0, 1.0, 1.0]   # [next_state_mse, infiltration_bce, stage_ce]
+
+explain:
+  shap_background_size: 30
+  shap_nsamples: 100
+  mc_dropout_samples: 20

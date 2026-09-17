@@ -1,0 +1,1 @@
+["flow_count", "mean_duration", "std_duration", "bytes_in", "bytes_out", "pkts_in", "pkts_out", "unique_dst_ip", "unique_dst_port", "syn_count", "ack_count", "rst_count", "fin_count", "iat_mean", "iat_std", "bidirectional_ratio", "tcp_pct", "win_size_mean", "ttl_mean", "retransmission_count"]

@@ -1,0 +1,27 @@
+data:
+  history_length: 20
+  horizon: 5
+  host_col: Src IP
+  raw_flows_path: data/raw/flows.csv
+  test_frac: 0.15
+  train_frac: 0.7
+  val_frac: 0.15
+  window_seconds: 60
+explain:
+  mc_dropout_samples: 20
+  shap_background_size: 30
+  shap_nsamples: 100
+model:
+  dropout: 0.2
+  encoder: lstm
+  hidden_dim: 64
+  num_layers: 2
+  num_stages: 7
+seed: 42
+train:
+  epochs: 60
+  loss_weights:
+  - 1.0
+  - 1.0
+  - 1.0
+  lr: 0.005
