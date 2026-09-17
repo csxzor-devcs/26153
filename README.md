@@ -43,29 +43,64 @@ heatmap, and SHAP feature attribution update together.
 
 ## Using the real dataset (CIC-IDS2018/2017)
 
-The bundled synthetic generator exists so the prototype runs with zero
-setup — it is **not** a substitute for the benchmark the brief requires.
-To run against real data:
+The bundled synthetic generator proves the pipeline works end-to-end offline.
+To benchmark against real network attack data:
 
-1. Download CSE-CIC-IDS2018 ("Processed Traffic Data for ML Algorithms")
-   from the official source referenced at nciipc.gov.in, or CIC-IDS2017 for
-   `PortScan`-labelled reconnaissance traffic specifically.
-2. Ensure the CSV has (or is renamed to) these CICFlowMeter columns:
-   `Timestamp, Src IP, Dst IP, Src Port, Dst Port, Protocol, Flow Duration,
-   Tot Fwd Pkts, Tot Bwd Pkts, TotLen Fwd Pkts, TotLen Bwd Pkts,
-   Flow IAT Mean, Flow IAT Std, SYN Flag Cnt, ACK Flag Cnt, RST Flag Cnt,
-   FIN Flag Cnt, Init Fwd Win Byts, Init Bwd Win Byts, Label`.
-   (Optional packet-level columns `TTL`, `Retransmit Cnt` are picked up
-   automatically if present; they degrade to zero otherwise.)
-3. Place it at `data/raw/flows.csv` (or update `data.raw_flows_path` in
-   `configs/default.yaml`).
-4. Re-run:
+### Option 1: Manual Preparation (Recommended)
+
+1. Download CSE-CIC-IDS2018 ("Processed Traffic Data for ML Algorithms") from
+   the official source referenced at nciipc.gov.in, or CIC-IDS2017 for
+   PortScan reconnaissance traffic.
+
+2. Prepare the dataset:
+   ```bash
+   python -m src.data.prepare \
+     --input-dir /path/to/CIC-IDS2018/CSVs \
+     --output data/raw/flows.csv \
+     --source cic_ids2018
+   ```
+   
+   This:
+   - Handles multiple CSVs from a directory
+   - Normalizes column names across dataset variants
+   - Validates required CICFlowMeter columns
+   - Removes malformed rows (NaN, Inf)
+   - Logs data quality (row counts, class distribution, timestamp range, hosts)
+   - Saves provenance (`flows_provenance.json`)
+
+3. Train and evaluate:
    ```bash
    python -m src.train
    python -m evaluation.benchmark
    ```
-   `evaluation/results.md` will report which data source was used —
-   check this line before citing the numbers.
+
+### Option 2: Auto-Preparation
+
+Point `configs/default.yaml` at the raw data directory:
+```yaml
+data:
+  raw_input_dir: "/path/to/CIC-IDS2018/CSVs"
+  dataset_source: "cic_ids2018"
+```
+
+Then run training — `src.train.py` will call `prepare.py` automatically.
+
+### Column Format
+
+Input CSV must have CICFlowMeter columns (or aliases):
+- Core: `Timestamp, Src IP, Dst IP, Src Port, Dst Port, Protocol, Flow Duration,
+  Tot Fwd Pkts, Tot Bwd Pkts, TotLen Fwd Pkts, TotLen Bwd Pkts,
+  Flow IAT Mean, Flow IAT Std, SYN Flag Cnt, ACK Flag Cnt, RST Flag Cnt,
+  FIN Flag Cnt, Init Fwd Win Byts, Init Bwd Win Byts, Label`
+- Optional packet-level: `TTL, Retransmit Cnt` (degrade to 0.0 if absent)
+
+### Evaluation Results
+
+`evaluation/results.md` distinguishes:
+- **Synthetic benchmark:** Bundled offline generator (pipeline verification only)
+- **Real benchmark:** CIC-IDS2018/2017 (actual project result)
+
+Do not cite synthetic results as project evidence.
 
 ## Repository layout
 
@@ -85,16 +120,33 @@ app/streamlit_app.py          offline demo UI
 tests/smoke_test.py           end-to-end pipeline check
 ```
 
+## Forecasting vs. Detection
+
+This system makes a specific claim: **"proactive infiltration forecasting"** —
+predicting attacks *before* they complete, not just detecting them as they happen.
+
+To validate this claim scientifically, we distinguish:
+
+- **Pre-attack sequences:** History contains no attack traffic yet. Predicting
+  infiltration here is genuine early-warning.
+- **During-attack sequences:** History already contains attack traffic. Predicting
+  infiltration here is detection during attack, not forecasting.
+
+The attack semantics module (`src/data/attack_semantics.py`) automatically:
+1. Detects when each attack session begins per host
+2. Classifies sequences as pre-attack, during-attack, or benign
+3. Measures lead-time (windows of warning before attack onset)
+4. Reports early-warning rate separately from detection rate
+
+Results distinguish these rigorously so judges can evaluate the forecasting claim.
+
 ## Known limitations
 
 See `../techsoln.md` Section 12 — in particular, exfiltration-stage labels
 are heuristic (no public dataset used here ships ground truth for that
-stage), and the bundled synthetic data is for pipeline verification, not
-for citing as a project result.
+stage), and the bundled synthetic data is for pipeline verification only.
 
-**Read before demoing:** on the bundled synthetic benchmark, the world
-model currently trails the logistic-regression baseline on F1 and AUC-ROC
-(see `evaluation/results.md`, generated fresh by every `python -m
-evaluation.benchmark` run). This has been diagnosed, not hidden — see
-techsoln.md sec 12 item 5 for why, and why it's expected to look different
-on real CIC-IDS2018 data.
+**Synthetic benchmark caveat:** On bundled data, the world model currently
+trails the logistic-regression baseline (see `evaluation/results.md`).
+This is expected — synthetic attack signatures are single-window-separable.
+Real CIC-IDS2018 traffic is noisier and should favor temporal modeling.
