@@ -28,16 +28,44 @@ from src.models.world_model import build_model, world_model_loss
 
 
 def load_flows(cfg: dict):
+    import pandas as pd
     path = cfg["data"]["raw_flows_path"]
-    if os.path.exists(path):
-        import pandas as pd
-        print(f"[train] loading real flow data from {path}")
-        return pd.read_csv(path)
 
-    print(f"[train] WARNING: {path} not found — using the bundled synthetic "
-          f"flow generator for this run. This proves the pipeline works "
-          f"offline but is NOT the CIC-IDS2018 benchmark the brief asks for. "
-          f"See README.md 'Using the real dataset'.")
+    # If processed flows exist, load them directly
+    if os.path.exists(path):
+        print(f"[train] loading flow data from {path}")
+        df = pd.read_csv(path)
+
+        # Check for provenance file to identify data source
+        provenance_path = path.replace(".csv", "_provenance.json")
+        if os.path.exists(provenance_path):
+            with open(provenance_path) as f:
+                provenance = json.load(f)
+            print(f"[train] data source: {provenance.get('source', 'unknown')}")
+            print(f"[train] flows retained: {provenance['quality_stats'].get('rows_total', '?'):,}")
+
+        return df
+
+    # If input directory specified, try to prepare dataset
+    input_dir = cfg["data"].get("raw_input_dir")
+    if input_dir and os.path.exists(input_dir):
+        print(f"[train] preparing dataset from {input_dir}...")
+        from src.data.prepare import main as prepare_main
+        try:
+            source = cfg["data"].get("dataset_source", "cic_ids2018")
+            df, provenance = prepare_main(input_dir, path, source)
+            return df
+        except Exception as e:
+            print(f"[train] ERROR during preparation: {e}")
+            print(f"[train] falling back to synthetic data")
+
+    # Fall back to synthetic
+    print(f"[train] WARNING: {path} not found and no input_dir configured.")
+    print(f"[train] Using bundled synthetic flow generator for this run.")
+    print(f"[train] To benchmark against real CIC-IDS2018:")
+    print(f"[train]   1. Download dataset to /path/to/CSVs")
+    print(f"[train]   2. Set data.raw_input_dir in configs/default.yaml")
+    print(f"[train]   3. Re-run: python -m src.train")
     from src.data.synthetic_flows import generate_synthetic_flows
     return generate_synthetic_flows()
 

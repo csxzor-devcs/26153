@@ -4,9 +4,14 @@ data:
   window_seconds: 60
   history_length: 20        # T: how many past windows the model sees
   horizon: 5                # K: how many windows ahead to forecast
-  raw_flows_path: "data/raw/flows.csv"   # point this at real CIC-IDS2018/2017 CSV(s)
+
+  # Real dataset configuration
+  raw_flows_path: "data/raw/flows.csv"   # processed flows (output of prepare.py)
+  raw_input_dir: null                    # set to /path/to/CIC-IDS2018/CSVs to auto-prepare
+  dataset_source: "cic_ids2018"          # cic_ids2018 | cic_ids2017
+
   host_col: "Src IP"
-  train_frac: 0.70          # host-level split, not row-level (see techsoln.md sec 8)
+  train_frac: 0.70          # host-level split (see techsoln.md sec 8)
   val_frac: 0.15
   test_frac: 0.15
 
