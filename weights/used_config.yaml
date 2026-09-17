@@ -31,5 +31,5 @@ train:
   - 1.0
   lr: 0.005
   min_epochs: 5
-  selected_threshold: 0.2
+  selected_threshold: 0.4
   selected_threshold_lr: 0.6
