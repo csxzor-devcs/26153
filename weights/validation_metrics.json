@@ -1,0 +1,6 @@
+{
+  "best_val_loss": 0.6062129735946655,
+  "best_epoch": 11,
+  "selected_threshold_world_model": 0.5,
+  "selected_threshold_baseline": 0.5
+}

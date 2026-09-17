@@ -105,25 +105,28 @@ def build_sequences_with_status(state_df: pd.DataFrame, T: int = 20, K: int = 5,
         onset_ts = host_df["attack_onset_window"].iloc[0]  # Same for all rows of host
 
         n = len(host_df)
-        for t in range(T, n - K):
-            # Input history [t-T..t] (past T windows)
-            X.append(feats[t - T:t])
+        for i in range(T, n - K):
+            # Input history [S_{i-T+1}, ..., S_i]
+            # In Python 0-indexing: feats[i-T+1:i+1]
+            X.append(feats[i - T + 1:i + 1])
 
-            # Targets (match windowing.py: future-only forecast)
-            # y_next: predict current window (one step after history)
-            y_next.append(feats[t])
-            # y_inf: infiltration in NEXT K windows (windows t+1 through t+K, future-only)
-            y_inf.append(1.0 if np.any(stages[t + 1:t + 1 + K] > 0) else 0.0)
-            y_stage.append(stages[t])
+            # Targets (canonical: future-only forecast, matching windowing.py)
+            # y_next: S_{i+1}
+            y_next.append(feats[i + 1])
+            # y_inf: infiltration in NEXT K windows [S_{i+1}, ..., S_{i+K}]
+            y_inf.append(1.0 if np.any(stages[i + 1:i + 1 + K] > 0) else 0.0)
+            # y_stage: stage of S_{i+1}
+            y_stage.append(stages[i + 1])
 
             # Status tracking
             hosts.append(host)
-            times.append(host_df["window_start"].iloc[t])
-            forecast_status_list.append(status[t])
-            contains_attack_list.append(1.0 if np.any(stages[t - T:t] > 0) else 0.0)
+            times.append(host_df["window_start"].iloc[i])  # Timestamp at history endpoint
+            forecast_status_list.append(status[i])
+            # Whether history [S_{i-T+1}, ..., S_i] contains any attack windows
+            contains_attack_list.append(1.0 if np.any(stages[i - T + 1:i + 1] > 0) else 0.0)
             lead_times.append(
-                (onset_ts - host_df["window_start"].iloc[t]).total_seconds() / 60
-                if onset_ts is not None and status[t] == "pre_attack"
+                (onset_ts - host_df["window_start"].iloc[i]).total_seconds() / 60
+                if onset_ts is not None and status[i] == "pre_attack"
                 else np.inf
             )
 

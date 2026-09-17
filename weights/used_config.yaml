@@ -3,6 +3,7 @@ data:
   history_length: 20
   horizon: 5
   host_col: Src IP
+  purge_gap_seconds: 300
   raw_flows_path: data/raw/flows.csv
   raw_input_dir: null
   split_strategy: chronological
@@ -22,9 +23,12 @@ model:
   num_stages: 7
 seed: 42
 train:
+  early_stopping_patience: 5
   epochs: 60
   loss_weights:
   - 1.0
   - 1.0
   - 1.0
   lr: 0.005
+  min_epochs: 10
+  selected_threshold: 0.5

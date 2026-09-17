@@ -16,6 +16,10 @@ data:
   split_strategy: "chronological"
   train_frac: 0.70
   val_frac: 0.15
+  # Purge gap between splits: temporal buffer to prevent information leakage
+  # around train/val/test boundaries. Value in seconds.
+  # Recommended: >= horizon * window_seconds (e.g., 5 * 60 = 300 for K=5, window=60s)
+  purge_gap_seconds: 300
 
   # Attack semantics: enable to track pre-attack vs during-attack sequences
   use_attack_semantics: true
@@ -31,8 +35,11 @@ model:
 
 train:
   epochs: 60
+  min_epochs: 10                    # minimum epochs before early stopping
+  early_stopping_patience: 5        # stop if no validation improvement for N epochs
   lr: 0.005
   loss_weights: [1.0, 1.0, 1.0]   # [next_state_mse, infiltration_bce, stage_ce]
+  # selected_threshold will be set by train.py during validation-based threshold selection
 
 explain:
   shap_background_size: 30
