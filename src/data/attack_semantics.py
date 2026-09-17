@@ -106,12 +106,14 @@ def build_sequences_with_status(state_df: pd.DataFrame, T: int = 20, K: int = 5,
 
         n = len(host_df)
         for t in range(T, n - K):
-            # Input history [t-T..t]
+            # Input history [t-T..t] (past T windows)
             X.append(feats[t - T:t])
 
-            # Targets
+            # Targets (match windowing.py: future-only forecast)
+            # y_next: predict current window (one step after history)
             y_next.append(feats[t])
-            y_inf.append(1.0 if np.any(stages[t:t + K] > 0) else 0.0)
+            # y_inf: infiltration in NEXT K windows (windows t+1 through t+K, future-only)
+            y_inf.append(1.0 if np.any(stages[t + 1:t + 1 + K] > 0) else 0.0)
             y_stage.append(stages[t])
 
             # Status tracking

@@ -11,9 +11,16 @@ data:
   dataset_source: "cic_ids2018"          # cic_ids2018 | cic_ids2017
 
   host_col: "Src IP"
-  train_frac: 0.70          # host-level split (see techsoln.md sec 8)
+
+  # Split strategy: chronological (default, temporal safety) or host-level (random, for comparison)
+  split_strategy: "chronological"
+  train_frac: 0.70
   val_frac: 0.15
-  test_frac: 0.15
+
+  # Attack semantics: enable to track pre-attack vs during-attack sequences
+  use_attack_semantics: true
+  # If true, saves forecast_status, contains_attack, lead_times in test_split.npz
+  # for early-warning evaluation separate from detection evaluation
 
 model:
   encoder: lstm              # lstm | transformer

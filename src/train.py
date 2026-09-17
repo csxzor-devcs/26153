@@ -86,12 +86,51 @@ def main(config_path: str):
     flows = load_flows(cfg)
     states = build_state_vectors(flows, window_seconds=cfg["data"]["window_seconds"],
                                   host_col=cfg["data"]["host_col"])
-    seq = build_sequences(states, T=cfg["data"]["history_length"], K=cfg["data"]["horizon"])
+
+    # Optionally enhance with attack semantics (pre-attack/during-attack classification)
+    use_attack_semantics = cfg["data"].get("use_attack_semantics", False)
+    if use_attack_semantics:
+        from src.data.attack_semantics import detect_attack_onsets, build_sequences_with_status
+        states = detect_attack_onsets(states)
+        seq = build_sequences_with_status(states, T=cfg["data"]["history_length"],
+                                          K=cfg["data"]["horizon"])
+        print(f"[train] attack semantics enabled: {len(seq['X'])} sequences "
+              f"({(seq['forecast_status'] == 'pre_attack').sum()} pre-attack, "
+              f"{(seq['forecast_status'] == 'attack_in_progress').sum()} during-attack, "
+              f"{(seq['forecast_status'] == 'benign').sum()} benign)")
+    else:
+        from src.features.windowing import build_sequences
+        seq = build_sequences(states, T=cfg["data"]["history_length"], K=cfg["data"]["horizon"])
+        print(f"[train] attack semantics disabled")
+
     print(f"[train] built {len(seq['X'])} sequences across {len(np.unique(seq['hosts']))} hosts "
           f"({seq['y_inf'].mean():.1%} positive infiltration rate)")
 
-    train_mask, val_mask, test_mask = host_level_split(
-        seq["hosts"], cfg["data"]["train_frac"], cfg["data"]["val_frac"], seed)
+    # Use chronological split (SAFE) by default; host-level split available for comparison
+    split_strategy = cfg["data"].get("split_strategy", "chronological")
+
+    if split_strategy == "chronological":
+        from src.features.windowing import chronological_split, verify_no_leakage
+        train_mask, val_mask, test_mask = chronological_split(
+            seq["times"], cfg["data"]["train_frac"], cfg["data"]["val_frac"])
+
+        # Verify no temporal leakage
+        leakage_check = verify_no_leakage(seq["times"], train_mask, val_mask, test_mask)
+        if not leakage_check["is_valid"]:
+            print(f"[train] WARNING: Temporal leakage detected:")
+            for issue in leakage_check["issues"]:
+                print(f"  - {issue}")
+        else:
+            print(f"[train] ✓ Chronological split verified (no temporal leakage)")
+            print(f"[train]   Train range: {leakage_check['stats']['train_time_min']} → {leakage_check['stats']['train_time_max']}")
+            print(f"[train]   Val range:   {leakage_check['stats']['val_time_min']} → {leakage_check['stats']['val_time_max']}")
+            print(f"[train]   Test range:  {leakage_check['stats']['test_time_min']} → {leakage_check['stats']['test_time_max']}")
+    else:
+        # Fall back to host-level split (non-temporal, useful for comparison)
+        from src.features.windowing import host_level_split
+        train_mask, val_mask, test_mask = host_level_split(
+            seq["hosts"], cfg["data"]["train_frac"], cfg["data"]["val_frac"], seed)
+        print(f"[train] Using host-level split (non-temporal, for comparison only)")
 
     scaler = StandardScaler().fit(seq["X"][train_mask].reshape(-1, len(FEATURE_COLUMNS)))
     X_train = scale_split(seq["X"][train_mask], scaler)
@@ -142,9 +181,18 @@ def main(config_path: str):
         yaml.safe_dump(cfg, f)
 
     os.makedirs("data/processed", exist_ok=True)
-    np.savez("data/processed/test_split.npz",
-              X_test=X_test, y_inf_test=y_inf_test, y_stage_test=y_stage_test,
-              hosts_test=seq["hosts"][test_mask])
+    # Save test split, including attack semantics if available
+    test_data = {
+        "X_test": X_test,
+        "y_inf_test": y_inf_test,
+        "y_stage_test": y_stage_test,
+        "hosts_test": seq["hosts"][test_mask],
+    }
+    if use_attack_semantics:
+        test_data["forecast_status_test"] = seq["forecast_status"][test_mask]
+        test_data["contains_attack_test"] = seq["contains_attack"][test_mask]
+        test_data["lead_times_test"] = seq["lead_times"][test_mask]
+    np.savez("data/processed/test_split.npz", **test_data)
 
     print("[train] saved: weights/world_model.pt, scaler.pkl, baseline_lr.pkl, "
           "feature_columns.json, used_config.yaml, data/processed/test_split.npz")

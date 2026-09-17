@@ -88,20 +88,24 @@ if __name__ == "__main__":
     X_test, y_inf_test = data["X_test"], data["y_inf_test"]
 
     attack_idx = np.where(y_inf_test == 1)[0]
+    demo_type = "attack"
     if len(attack_idx) == 0:
-        raise SystemExit("No positive-infiltration sequences in the test split to demo rollout on.")
+        # No attacks in test — demo on a benign sequence instead (happens with chronological
+        # split when all attacks cluster in time). Pick the sequence model is most confident
+        # is infiltration (highest false-alarm).
+        attack_idx = np.arange(len(y_inf_test))
+        demo_type = "benign (no attacks in test split; chronological ordering puts all attacks in training)"
 
-    # Pick the attack sequence the model is most confident about, not just the
-    # first one — attack_idx[0] can land on a false negative (model correctly
-    # trained but wrong on that one sequence), which makes for a dead-looking
-    # demo (saturated near-zero logit) rather than a wired-code problem.
+    # Pick the sequence the model is most confident about, not just the first one
+    # — prevents picking a hard false negative which makes for a dead-looking demo.
     with torch.no_grad():
-        attack_probs = torch.sigmoid(
+        probs = torch.sigmoid(
             model(torch.tensor(X_test[attack_idx]))["infiltration_logit"]).squeeze(-1).numpy()
-    best = attack_idx[np.argmax(attack_probs)]
+    best = attack_idx[np.argmax(probs)]
     sample = torch.tensor(X_test[best]).unsqueeze(0)
     result = rollout_with_uncertainty(model, sample, K=cfg["data"]["horizon"],
                                        n_samples=cfg["explain"]["mc_dropout_samples"])
+    print(f"[rollout] demo on {demo_type} sequence")
     print(json.dumps({
         "infiltration_prob_trajectory": [round(p, 3) for p in result["infiltration_prob_trajectory"]],
         "prob_mean": [round(p, 3) for p in result["prob_mean"]],

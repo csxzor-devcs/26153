@@ -58,21 +58,27 @@ if __name__ == "__main__":
 
     attack_idx = np.where(y_inf_test == 1)[0]
     if len(attack_idx) == 0:
-        raise SystemExit("No positive-infiltration sequences in the test split to explain.")
+        # No attacks in test — explain on a benign sequence instead (happens with chronological
+        # split when all attacks cluster in time). Pick the sequence model is most confident
+        # is infiltration (highest false-alarm).
+        attack_idx = np.arange(len(y_inf_test))
+        demo_type = "benign (no attacks in test split)"
+    else:
+        demo_type = "attack"
 
-    # Pick the most confidently-predicted attack sequence, not just the
-    # first — attack_idx[0] can be a false negative, whose saturated logit
-    # makes SHAP attributions collapse to ~0 for reasons unrelated to
-    # whether SHAP itself is wired correctly.
+    # Pick the most confidently-predicted sequence, not just the first
+    # — prevents picking a hard false negative, whose saturated logit
+    # makes SHAP attributions collapse to ~0.
     with torch.no_grad():
-        attack_probs = torch.sigmoid(
+        probs = torch.sigmoid(
             model(torch.tensor(X_test[attack_idx]))["infiltration_logit"]).squeeze(-1).numpy()
-    query_history = X_test[attack_idx[np.argmax(attack_probs)]]
+    query_history = X_test[attack_idx[np.argmax(probs)]]
     attn = extract_attention(model, torch.tensor(query_history).unsqueeze(0))
     background = X_test[:cfg["explain"]["shap_background_size"], -1, :]
     shap_attr = explain_features(model, background, query_history, feature_columns,
                                   nsamples=cfg["explain"]["shap_nsamples"])
 
+    print(f"[explain] demo on {demo_type} sequence")
     print("Attention over the last", len(attn), "windows (most recent last):")
     print([round(a, 3) for a in attn])
     print("\nTop-5 SHAP feature attributions for this window's infiltration score:")

@@ -1,10 +1,13 @@
 data:
+  dataset_source: cic_ids2018
   history_length: 20
   horizon: 5
   host_col: Src IP
   raw_flows_path: data/raw/flows.csv
-  test_frac: 0.15
+  raw_input_dir: null
+  split_strategy: chronological
   train_frac: 0.7
+  use_attack_semantics: true
   val_frac: 0.15
   window_seconds: 60
 explain:
