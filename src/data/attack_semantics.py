@@ -163,8 +163,60 @@ def create_pre_attack_split(sequences: dict, seed: int = 42) -> tuple:
     return pre_attack_mask, during_attack_mask, benign_mask
 
 
+def _compute_event_level_metrics(y_inf_true: np.ndarray, y_inf_pred: np.ndarray,
+                                 lead_times: np.ndarray, hosts: np.ndarray,
+                                 forecast_status: np.ndarray, threshold: float = 0.5) -> dict:
+    """
+    Event-level accounting: each attack event per host counts as 1, not N sequences.
+
+    Returns:
+    - event_warned_count: number of attack events warned before onset
+    - event_missed_count: number of attack events not warned
+    - total_events: total number of unique attack events (per-host first onsets)
+    - event_warn_rate: pct_events_warned = event_warned_count / total_events
+    """
+    if forecast_status is None or hosts is None:
+        return None
+
+    pre_attack_mask = ~np.isinf(lead_times)
+    y_pred_binary = (y_inf_pred > threshold).astype(int)
+
+    # Group by host and find unique attack events
+    unique_hosts = np.unique(hosts)
+    event_warned_count = 0
+    event_missed_count = 0
+
+    for host in unique_hosts:
+        host_mask = (hosts == host) & pre_attack_mask
+        if not host_mask.any():
+            continue  # No pre-attack sequences for this host
+
+        host_y_true = y_inf_true[host_mask]
+        host_y_pred = y_pred_binary[host_mask]
+
+        # This host has at least one pre-attack sequence with true attack (y_inf_true=1)
+        has_true_attack = (host_y_true == 1).any()
+        has_warning = (host_y_pred == 1).any()
+
+        if has_true_attack:
+            if has_warning:
+                event_warned_count += 1
+            else:
+                event_missed_count += 1
+
+    total_events = event_warned_count + event_missed_count
+
+    return {
+        "event_warned_count": int(event_warned_count),
+        "event_missed_count": int(event_missed_count),
+        "total_events": int(total_events),
+        "event_warn_rate": float(event_warned_count / total_events) if total_events > 0 else None,
+    }
+
+
 def compute_lead_time_metrics(y_inf_true: np.ndarray, y_inf_pred: np.ndarray,
-                               lead_times: np.ndarray, threshold: float = 0.5) -> dict:
+                               lead_times: np.ndarray, hosts: np.ndarray = None,
+                               forecast_status: np.ndarray = None, threshold: float = 0.5) -> dict:
     """
     Compute early-warning specific metrics.
 
@@ -223,7 +275,7 @@ def compute_lead_time_metrics(y_inf_true: np.ndarray, y_inf_pred: np.ndarray,
     total_pre_attack_attacks = np.sum((y_inf_true == 1) & pre_attack_mask)
     pct_warned = early_warnings / total_pre_attack_attacks if total_pre_attack_attacks > 0 else None
 
-    return {
+    sequence_level_metrics = {
         "early_warnings": int(early_warnings),
         "false_early_alarms": int(false_early_alarms),
         "missed_attacks": int(missed_attacks),
@@ -231,6 +283,18 @@ def compute_lead_time_metrics(y_inf_true: np.ndarray, y_inf_pred: np.ndarray,
         "pct_attacks_warned_before_onset": float(pct_warned) if pct_warned else None,
         "total_pre_attack_sequences": int(pre_attack_mask.sum()),
         "total_pre_attack_attacks": int(total_pre_attack_attacks),
+    }
+
+    # Event-level metrics: count unique attack events per host, not per sequence
+    event_level_metrics = None
+    if hosts is not None:
+        event_level_metrics = _compute_event_level_metrics(
+            y_inf_true, y_inf_pred, lead_times, hosts, forecast_status, threshold
+        )
+
+    return {
+        **sequence_level_metrics,
+        "event_level_metrics": event_level_metrics,
     }
 
 

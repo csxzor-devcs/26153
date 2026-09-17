@@ -21,6 +21,7 @@ def main():
 
     data = np.load("data/processed/test_split.npz")
     X_test, y_inf_test = data["X_test"], data["y_inf_test"]
+    hosts_test = data["hosts_test"]
 
     # Check if attack semantics data is available
     has_attack_semantics = "forecast_status_test" in data.files
@@ -28,17 +29,21 @@ def main():
         forecast_status = data["forecast_status_test"]
         lead_times = data["lead_times_test"]
 
+    # Load frozen thresholds selected during validation
+    selected_threshold_wm = cfg["train"].get("selected_threshold", 0.5)
+    selected_threshold_lr = cfg["train"].get("selected_threshold_lr", 0.5)
+
     model.eval()
     with torch.no_grad():
         wm_prob = torch.sigmoid(model(torch.tensor(X_test))["infiltration_logit"]).numpy()
-    wm_pred = (wm_prob > 0.5).astype(int)
+    wm_pred = (wm_prob > selected_threshold_wm).astype(int)  # Use frozen threshold
     wm_metrics = infiltration_metrics(y_inf_test, wm_pred)
 
-    lr_pred = baseline.predict_infiltration(X_test[:, -1, :])
+    lr_prob = baseline.inf_model.predict_proba(X_test[:, -1, :])[:, 1]
+    lr_pred = (lr_prob > selected_threshold_lr).astype(int)  # Use frozen threshold
     lr_metrics = infiltration_metrics(y_inf_test, lr_pred)
 
     from sklearn.metrics import roc_auc_score
-    lr_prob = baseline.inf_model.predict_proba(X_test[:, -1, :])[:, 1]
     wm_auc = roc_auc_score(y_inf_test, wm_prob.ravel())
     lr_auc = roc_auc_score(y_inf_test, lr_prob)
 
@@ -47,8 +52,12 @@ def main():
     early_warning_metrics_lr = None
     if has_attack_semantics:
         from src.data.attack_semantics import compute_lead_time_metrics
-        early_warning_metrics_wm = compute_lead_time_metrics(y_inf_test, wm_prob, lead_times)
-        early_warning_metrics_lr = compute_lead_time_metrics(y_inf_test, lr_prob, lead_times)
+        early_warning_metrics_wm = compute_lead_time_metrics(
+            y_inf_test, wm_prob, lead_times, hosts_test, forecast_status, selected_threshold_wm
+        )
+        early_warning_metrics_lr = compute_lead_time_metrics(
+            y_inf_test, lr_prob, lead_times, hosts_test, forecast_status, selected_threshold_lr
+        )
 
     using_real_data = __import__("os").path.exists(cfg["data"]["raw_flows_path"])
     data_note = ("real flow data at `{}`".format(cfg["data"]["raw_flows_path"]) if using_real_data

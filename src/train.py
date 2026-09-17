@@ -304,6 +304,9 @@ def main(config_path: str):
     lr_metrics = infiltration_metrics(y_inf_test, lr_pred)
     print(f"[train] baseline LR test metrics:   {lr_metrics}")
 
+    # Save LR threshold to config for benchmark script
+    cfg["train"]["selected_threshold_lr"] = float(best_threshold_lr)
+
     os.makedirs("weights", exist_ok=True)
     torch.save(model.state_dict(), "weights/world_model.pt")
     joblib.dump(scaler, "weights/scaler.pkl")
