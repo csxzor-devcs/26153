@@ -142,6 +142,24 @@ def per_scenario_chronological_split(times: np.ndarray, train_frac: float = 0.70
         val_idx = scenario_indices[times_sorted_idx[n_train:n_train + n_val]]
         test_idx = scenario_indices[times_sorted_idx[n_train + n_val:]]
 
+        # Enforce the purge gap: drop sequences at the val/test edge that
+        # start before (previous split's last timestamp + purge_gap). An
+        # index-only split leaves boundary sequences whose history/target
+        # footprint still overlaps the neighboring split; dropping them
+        # (rather than reassigning) is standard purge-gap practice.
+        purge = pd.Timedelta(seconds=purge_gap_seconds)
+
+        if len(train_idx) > 0 and len(val_idx) > 0:
+            train_end_time = times[train_idx].max()
+            val_idx = val_idx[times[val_idx] >= train_end_time + purge]
+
+        if len(val_idx) > 0 and len(test_idx) > 0:
+            val_end_time = times[val_idx].max()
+            test_idx = test_idx[times[test_idx] >= val_end_time + purge]
+        elif len(train_idx) > 0 and len(test_idx) > 0:
+            train_end_time = times[train_idx].max()
+            test_idx = test_idx[times[test_idx] >= train_end_time + purge]
+
         train_mask[train_idx] = True
         val_mask[val_idx] = True
         test_mask[test_idx] = True
@@ -247,7 +265,7 @@ def host_level_split(hosts: np.ndarray, train_frac: float, val_frac: float, seed
 def verify_no_leakage(times: np.ndarray, train_mask: np.ndarray,
                       val_mask: np.ndarray, test_mask: np.ndarray,
                       T: int = 20, K: int = 5, window_seconds: int = 60,
-                      tolerance_seconds: int = 0) -> dict:
+                      tolerance_seconds: int = 0, hosts_array: np.ndarray = None) -> dict:
     """
     Verify temporal split integrity using EFFECTIVE INTERVALS, not just timestamps.
 
@@ -265,11 +283,39 @@ def verify_no_leakage(times: np.ndarray, train_mask: np.ndarray,
     This prevents training sequences' target windows from overlapping with
     validation/test sequences' history windows.
 
+    If `hosts_array` is given (per-scenario/per-host split), the check is run
+    independently per host instead of over the global timeline. Each host's
+    sequences are an independent sample with no cross-host inputs, so two
+    different hosts being simultaneously active (the normal case on a shared
+    network capture) is not leakage — only a host's own train sequences
+    overlapping that same host's val/test sequences is.
+
     Returns dict with:
     - is_valid: bool (no leakage detected)
     - issues: list of leakage violations
     - stats: detailed interval boundaries
     """
+    if hosts_array is not None:
+        issues = []
+        for host in np.unique(hosts_array):
+            host_mask = hosts_array == host
+            sub = verify_no_leakage(
+                times[host_mask], train_mask[host_mask], val_mask[host_mask], test_mask[host_mask],
+                T=T, K=K, window_seconds=window_seconds, tolerance_seconds=tolerance_seconds,
+            )
+            issues.extend(f"[host {host}] {issue}" for issue in sub["issues"])
+
+        # Global stats are informational only here (per-host validity is what counts).
+        global_check = verify_no_leakage(
+            times, train_mask, val_mask, test_mask,
+            T=T, K=K, window_seconds=window_seconds, tolerance_seconds=tolerance_seconds,
+        )
+        return {
+            "is_valid": len(issues) == 0,
+            "issues": issues,
+            "stats": global_check["stats"],
+        }
+
     issues = []
 
     train_times = times[train_mask]

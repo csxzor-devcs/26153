@@ -96,9 +96,19 @@ def build_model(model_cfg: dict, input_dim: int) -> nn.Module:
 
 
 def world_model_loss(pred: dict, y_next: torch.Tensor, y_inf: torch.Tensor,
-                      y_stage: torch.Tensor, weights=(1.0, 1.0, 1.0)):
+                      y_stage: torch.Tensor, weights=(1.0, 1.0, 1.0), pos_weight=None):
+    """
+    pos_weight: scalar tensor upweighting the rare positive (infiltration)
+    class in the BCE term, typically n_negative/n_positive on the training
+    set. Without it, on a dataset where positives are ~1% of sequences, the
+    model can drive BCE near zero by predicting negative for everything and
+    never learns to detect the rare positives (this is what pos_weight
+    corrects for).
+    """
     mse = nn.functional.mse_loss(pred["next_state"], y_next)
-    bce = nn.functional.binary_cross_entropy_with_logits(pred["infiltration_logit"], y_inf)
+    bce = nn.functional.binary_cross_entropy_with_logits(
+        pred["infiltration_logit"], y_inf, pos_weight=pos_weight
+    )
     ce = nn.functional.cross_entropy(pred["stage_logits"], y_stage)
     total = weights[0] * mse + weights[1] * bce + weights[2] * ce
     return total, {"mse": mse.item(), "bce": bce.item(), "ce": ce.item()}

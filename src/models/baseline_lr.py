@@ -10,8 +10,15 @@ from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_
 
 class BaselineLogReg:
     def __init__(self, max_iter: int = 1000):
-        self.inf_model = LogisticRegression(max_iter=max_iter)
-        self.stage_model = LogisticRegression(max_iter=max_iter, multi_class="auto")
+        # class_weight="balanced" reweights the rare infiltration-positive
+        # class the same way world_model_loss's pos_weight does, so the
+        # baseline isn't handicapped by the class imbalance relative to the
+        # world model when comparing "does history help" (techsoln.md sec 8).
+        self.inf_model = LogisticRegression(max_iter=max_iter, class_weight="balanced")
+        # multi_class="auto" was the default behavior and was removed as an
+        # accepted kwarg in newer scikit-learn (multinomial is now always
+        # used automatically when appropriate).
+        self.stage_model = LogisticRegression(max_iter=max_iter)
 
     def fit(self, X_last_state, y_inf, y_stage):
         self.inf_model.fit(X_last_state, y_inf)

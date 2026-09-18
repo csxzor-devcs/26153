@@ -1,69 +1,116 @@
 """
-Maps dataset attack labels to MITRE ATT&CK stages (see techsoln.md sec 2).
+MITRE ATT&CK mapping and exfiltration heuristics.
 
-This mapping is an explicit, documented assumption: public flow datasets
-(CIC-IDS2017/2018) were not built with MITRE stages in mind. Exfiltration in
-particular has no ground-truth label in these datasets, so it is never
-assigned directly from a raw label — it is only ever produced by
-`apply_exfiltration_heuristic` below, and every consumer of stage 5 must
-treat it as heuristic, not ground truth.
+This module provides:
+- Mapping of CIC-IDS2017 attack labels to attack stages.
+- A lightweight exfiltration heuristic used during feature extraction.
 """
-import numpy as np
+
+from __future__ import annotations
+
 import pandas as pd
 
-STAGE_NAMES = [
-    "Benign/None",
-    "Reconnaissance",
-    "Initial Access",
-    "Lateral Movement",
-    "Command & Control",
-    "Exfiltration (heuristic)",
-    "Impact/Noise (DoS-DDoS, out of MITRE-5-stage scope)",
-]
 
 LABEL_TO_STAGE = {
-    "Benign": 0,
+    "BENIGN": 0,
+
+    # Reconnaissance
     "PortScan": 1,
-    "FTP-BruteForce": 2,
-    "SSH-Bruteforce": 2,
-    "Brute Force -Web": 2,
-    "Brute Force -XSS": 2,
-    "SQL Injection": 2,
-    "Infilteration": 3,
-    "Bot": 4,
-    "DoS attacks-GoldenEye": 6,
-    "DoS attacks-Slowloris": 6,
-    "DoS attacks-SlowHTTPTest": 6,
-    "DoS attacks-Hulk": 6,
-    "DDoS attack-HOIC": 6,
-    "DDoS attacks-LOIC-HTTP": 6,
-    "DDOS attack-LOIC-UDP": 6,
+
+    # Initial Access / Credential Access
+    "FTP-Patator": 2,
+    "SSH-Patator": 2,
+
+    # Discovery / Execution / Impact
+    "DoS Hulk": 3,
+    "DoS GoldenEye": 3,
+    "DoS slowloris": 3,
+    "DoS Slowhttptest": 3,
+    "DDoS": 3,
+
+    # Credential / Application attacks
+    # Note: the CIC-IDS2017 CSVs encode these labels with a literal 0x96
+    # (en dash) byte between "Web Attack" and the sub-type, which survives
+    # as U+0096 after latin-1 decoding — not a double space.
+    "Web Attack \x96 Brute Force": 4,
+    "Web Attack \x96 XSS": 4,
+    "Web Attack \x96 Sql Injection": 4,
+
+    # Command and Control / Persistence
+    "Bot": 5,
+    "Infiltration": 5,
+
+    # Exfiltration / other high-impact activity
+    "Heartbleed": 6,
 }
 
 
 def label_to_stage(label: str) -> int:
-    """Unknown labels default to Benign(0) rather than raising, so a stray
-    or misspelled dataset label never crashes the pipeline silently-wrong —
-    it just contributes no attack signal, which is the safe failure mode."""
-    return LABEL_TO_STAGE.get(label, 0)
-
-
-def apply_exfiltration_heuristic(state_df: pd.DataFrame, z_thresh: float = 2.0) -> pd.DataFrame:
     """
-    Upgrades a window's stage_label to Exfiltration(5) when outbound bytes
-    spike (z-score > z_thresh vs that host's own history) while the host is
-    already in Lateral Movement(3) or Command & Control(4) — i.e. "large
-    outbound transfer right after a foothold/beacon is established."
-    This is a heuristic label, not dataset ground truth (see module docstring).
+    Convert a CIC-IDS2017 label into an attack stage.
+
+    An unknown or misspelled dataset label never crashes the pipeline
+    silently-wrong — it just contributes no attack signal, which is the
+    safe failure mode.
+    """
+    if pd.isna(label):
+        return 0
+
+    return LABEL_TO_STAGE.get(str(label).strip(), 0)
+
+
+def apply_exfiltration_heuristic(
+    state_df: pd.DataFrame,
+    z_thresh: float = 2.0,
+) -> pd.DataFrame:
+    """
+    Apply a lightweight per-host exfiltration heuristic.
+
+    Escalates a window to the exfiltration/high-impact stage (6) only when
+    BOTH hold:
+    - the host is already flagged Bot/Infiltration (stage 5) — i.e. a
+      foothold is already established, matching this heuristic's original
+      intent of catching "a large outbound transfer right after a
+      foothold/beacon", not just any bursty traffic day; and
+    - that window's outbound bytes are a statistical outlier (z_thresh)
+      relative to that host's own PAST behavior only (expanding mean/std,
+      shifted by one window) — using the host's full-history mean/std
+      (including future windows) would leak future information into a
+      past window's label.
+
+    The implementation intentionally avoids DataFrameGroupBy.apply()
+    so that the `host` grouping column is preserved across pandas
+    versions.
     """
     df = state_df.copy()
 
     def _flag(g: pd.DataFrame) -> pd.DataFrame:
-        roll_mean = g["bytes_out"].expanding().mean().shift(1)
-        roll_std = g["bytes_out"].expanding().std().shift(1).replace(0, np.nan)
-        z = (g["bytes_out"] - roll_mean) / roll_std
-        upgrade = (z > z_thresh) & g["stage_label"].isin([3, 4])
-        g.loc[upgrade, "stage_label"] = 5
+        g = g.sort_values("window_start").copy()
+
+        if "bytes_out" not in g.columns or "stage_label" not in g.columns:
+            return g
+
+        values = pd.to_numeric(g["bytes_out"], errors="coerce").fillna(0.0)
+
+        roll_mean = values.expanding().mean().shift(1)
+        roll_std = values.expanding().std().shift(1).replace(0, pd.NA)
+
+        z = (values - roll_mean) / roll_std
+        already_compromised = g["stage_label"] >= 5
+        upgrade = (z > z_thresh).fillna(False) & already_compromised
+
+        g.loc[upgrade, "stage_label"] = 6
+
         return g
 
-    return df.groupby("host", group_keys=False).apply(_flag)
+    groups = []
+
+    for _, group in df.groupby("host", sort=False):
+        groups.append(_flag(group))
+
+    if not groups:
+        return df
+
+    result = pd.concat(groups, ignore_index=True)
+
+    return result

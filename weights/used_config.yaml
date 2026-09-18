@@ -1,10 +1,10 @@
 data:
-  dataset_source: synthetic_dev
-  history_length: 5
-  horizon: 2
+  dataset_source: cic_ids2017
+  history_length: 20
+  horizon: 5
   host_col: Src IP
-  purge_gap_seconds: 0
-  raw_flows_path: data/raw/flows_synthetic_dev.csv
+  purge_gap_seconds: 1440
+  raw_flows_path: data/raw/flows.csv
   raw_input_dir: null
   split_strategy: chronological
   train_frac: 0.7
@@ -23,14 +23,14 @@ model:
   num_stages: 7
 seed: 42
 train:
-  early_stopping_patience: 3
-  epochs: 20
+  early_stopping_patience: 5
+  epochs: 60
   loss_weights:
   - 1.0
   - 1.0
   - 1.0
   lr: 0.005
-  min_epochs: 5
-  selected_threshold: 0.22
-  selected_threshold_lr: 0.53
-  selected_threshold_static: 0.63
+  min_epochs: 10
+  selected_threshold: 0.12000000000000001
+  selected_threshold_lr: 0.69
+  selected_threshold_static: 0.5

@@ -54,19 +54,81 @@ COLUMN_ALIASES = {
     "Src Port": ["Src Port", "Source Port", " Source Port"],
     "Dst Port": ["Dst Port", "Destination Port", " Destination Port"],
     "Protocol": ["Protocol", " Protocol"],
+
     "Flow Duration": ["Flow Duration", " Flow Duration", "Fwd IAT Total"],
-    "Tot Fwd Pkts": ["Tot Fwd Pkts", " Tot Fwd Pkts", "Total Fwd Packets"],
-    "Tot Bwd Pkts": ["Tot Bwd Pkts", " Tot Bwd Pkts", "Total Bwd Packets"],
-    "TotLen Fwd Pkts": ["TotLen Fwd Pkts", " TotLen Fwd Pkts", "Total Length Fwd Packets"],
-    "TotLen Bwd Pkts": ["TotLen Bwd Pkts", " TotLen Bwd Pkts", "Total Length Bwd Packets"],
+
+    "Tot Fwd Pkts": [
+        "Tot Fwd Pkts",
+        " Tot Fwd Pkts",
+        "Total Fwd Packets",
+    ],
+
+    "Tot Bwd Pkts": [
+        "Tot Bwd Pkts",
+        " Tot Bwd Pkts",
+        "Total Bwd Packets",
+        "Total Backward Packets",
+    ],
+
+    "TotLen Fwd Pkts": [
+        "TotLen Fwd Pkts",
+        " TotLen Fwd Pkts",
+        "Total Length Fwd Packets",
+        "Total Length of Fwd Packets",
+    ],
+
+    "TotLen Bwd Pkts": [
+        "TotLen Bwd Pkts",
+        " TotLen Bwd Pkts",
+        "Total Length Bwd Packets",
+        "Total Length of Bwd Packets",
+    ],
+
     "Flow IAT Mean": ["Flow IAT Mean", " Flow IAT Mean"],
     "Flow IAT Std": ["Flow IAT Std", " Flow IAT Std"],
-    "SYN Flag Cnt": ["SYN Flag Cnt", " SYN Flag Cnt", "Syn Count"],
-    "ACK Flag Cnt": ["ACK Flag Cnt", " ACK Flag Cnt", "Ack Count"],
-    "RST Flag Cnt": ["RST Flag Cnt", " RST Flag Cnt", "Rst Count"],
-    "FIN Flag Cnt": ["FIN Flag Cnt", " FIN Flag Cnt", "Fin Count"],
-    "Init Fwd Win Byts": ["Init Fwd Win Byts", " Init Fwd Win Byts", "Fwd Init Win Bytes"],
-    "Init Bwd Win Byts": ["Init Bwd Win Byts", " Init Bwd Win Byts", "Bwd Init Win Bytes"],
+
+    "SYN Flag Cnt": [
+        "SYN Flag Cnt",
+        " SYN Flag Cnt",
+        "Syn Count",
+        "SYN Flag Count",
+    ],
+
+    "ACK Flag Cnt": [
+        "ACK Flag Cnt",
+        " ACK Flag Cnt",
+        "Ack Count",
+        "ACK Flag Count",
+    ],
+
+    "RST Flag Cnt": [
+        "RST Flag Cnt",
+        " RST Flag Cnt",
+        "Rst Count",
+        "RST Flag Count",
+    ],
+
+    "FIN Flag Cnt": [
+        "FIN Flag Cnt",
+        " FIN Flag Cnt",
+        "Fin Count",
+        "FIN Flag Count",
+    ],
+
+    "Init Fwd Win Byts": [
+        "Init Fwd Win Byts",
+        " Init Fwd Win Byts",
+        "Fwd Init Win Bytes",
+        "Init_Win_bytes_forward",
+    ],
+
+    "Init Bwd Win Byts": [
+        "Init Bwd Win Byts",
+        " Init Bwd Win Byts",
+        "Bwd Init Win Bytes",
+        "Init_Win_bytes_backward",
+    ],
+
     "Label": ["Label", " Label"],
 }
 
@@ -169,8 +231,16 @@ def clean_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df.copy()
 
     # Identify numeric columns (all except Timestamp, IPs, Label)
-    numeric_cols = [col for col in df.columns if col not in
-                    ["Timestamp", "Src IP", "Dst IP", "Label"]]
+    numeric_cols = [
+    col for col in REQUIRED_COLUMNS
+    if col not in ["Timestamp", "Src IP", "Dst IP", "Label"]
+    and col in df.columns
+    ]
+
+    numeric_cols += [
+        col for col in OPTIONAL_COLUMNS
+        if col in df.columns and col not in numeric_cols
+    ]
 
     # Convert to numeric, coercing errors to NaN
     for col in numeric_cols:
@@ -235,7 +305,7 @@ def load_csvs(input_dir: str) -> pd.DataFrame:
         dfs = []
         for csv_file in csv_files:
             logger.info(f"  Loading: {Path(csv_file).name}")
-            dfs.append(pd.read_csv(csv_file))
+            dfs.append(pd.read_csv(csv_file, encoding="latin1"))
 
         df = pd.concat(dfs, ignore_index=True)
         logger.info(f"Concatenated {len(csv_files)} files: {len(df)} total rows")
@@ -249,7 +319,15 @@ def log_data_quality(df: pd.DataFrame, source: str) -> dict:
     Compute and log data quality metrics.
     Returns metrics dict for provenance recording.
     """
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    # CIC-IDS2017 timestamps are day-first (e.g. "03/07/2017" = 3 July, the
+    # Monday capture) and every day-of-month in this dataset is <=12, so
+    # dayfirst=True is required or pandas guesses MM/DD per-row and scatters
+    # rows across the wrong months instead of parsing them all as July 2017.
+    # format="mixed" is also required: the Monday file uses zero-padded
+    # HH:MM:SS while the other days use unpadded H:MM, and without "mixed"
+    # pandas infers one strptime format from the first row and silently
+    # turns every row using the other sub-format into NaT.
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="mixed", dayfirst=True, errors="coerce")
 
     stats = {
         "source": source,
@@ -315,8 +393,19 @@ def main(input_dir: str, output_file: str, source: str = "cic_ids2017"):
         if col not in df.columns:
             df[col] = 0.0
 
-    # Log quality
+    # Log quality (also parses df["Timestamp"] to datetime in place)
     quality_stats = log_data_quality(df, source)
+
+    # Drop rows whose Timestamp failed to parse rather than silently saving
+    # them with a blank Timestamp (they'd otherwise become NaT window keys
+    # during feature extraction downstream).
+    unparsed_ts = df["Timestamp"].isna()
+    if unparsed_ts.any():
+        logger.info(f"Dropping {unparsed_ts.sum()} rows with unparseable Timestamp")
+        df = df[~unparsed_ts].reset_index(drop=True)
+        clean_stats["rows_removed_na"] += int(unparsed_ts.sum())
+        clean_stats["rows_after"] = len(df)
+        clean_stats["rows_removed_total"] = clean_stats["rows_before"] - clean_stats["rows_after"]
 
     # Save
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)

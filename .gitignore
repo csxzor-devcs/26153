@@ -23,3 +23,10 @@ env/
 .idea/
 *.egg-info/
 .DS_Store
+
+# Large data files
+data/raw/flows.csv
+data/cic_ids2017/
+data/processed/test_split.npz
+runs/
+training.log
